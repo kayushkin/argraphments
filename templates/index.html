@@ -15,43 +15,27 @@
         </header>
 
         <div class="input-section">
-            <div class="tabs">
-                <button class="tab active" onclick="switchTab('upload', this)">Upload Audio</button>
-                <button class="tab" onclick="switchTab('record', this)">Record Live</button>
-                <button class="tab" onclick="switchTab('paste', this)">Paste Text</button>
-            </div>
+            <div class="input-row">
+                <!-- Record -->
+                <button id="record-btn" class="btn btn-record" onclick="toggleRecording()">
+                    <span class="record-dot"></span> Record
+                </button>
+                <span id="record-time" class="record-time">00:00</span>
 
-            <!-- Upload -->
-            <form id="tab-upload" class="tab-content active"
-                  hx-post="/argraphments/transcribe"
-                  hx-target="#result"
-                  hx-encoding="multipart/form-data"
-                  hx-indicator="#spinner">
-                <label class="file-drop" id="drop-zone">
-                    <input type="file" name="audio" accept="audio/*,video/*" onchange="updateFileName(this)">
-                    <span id="file-label">Drop audio file here or click to browse</span>
+                <!-- Upload -->
+                <label class="btn btn-upload">
+                    <input type="file" name="audio" accept="audio/*,video/*" onchange="uploadFile(this)" hidden>
+                    Upload Audio
                 </label>
-                <button type="submit" class="btn">Transcribe</button>
-            </form>
-
-            <!-- Record -->
-            <div id="tab-record" class="tab-content">
-                <div class="record-controls">
-                    <button id="record-btn" class="btn btn-record" onclick="toggleRecording()">
-                        <span class="record-dot"></span> Record
-                    </button>
-                    <span id="record-time" class="record-time">00:00</span>
-                </div>
-                <div id="record-status"></div>
             </div>
+
+            <div id="record-status"></div>
 
             <!-- Paste -->
-            <div id="tab-paste" class="tab-content">
-                <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner">
-                    <textarea name="transcript" rows="10" placeholder="Paste a conversation transcript here..."></textarea>
-                    <button type="submit" class="btn">Analyze</button>
-                </form>
-            </div>
+            <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner">
+                <textarea name="transcript" rows="8" placeholder="Or paste a conversation transcript here..."></textarea>
+                <button type="submit" class="btn">Analyze</button>
+            </form>
         </div>
 
         <div id="spinner" class="htmx-indicator">

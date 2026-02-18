@@ -1,15 +1,10 @@
-// Tab switching
-function switchTab(name, btn) {
-    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.getElementById('tab-' + name).classList.add('active');
-    btn.classList.add('active');
-}
-
-// File name display
-function updateFileName(input) {
-    const label = document.getElementById('file-label');
-    label.textContent = input.files[0]?.name || 'Drop audio file here or click to browse';
+// Upload file
+function uploadFile(input) {
+    if (!input.files[0]) return;
+    const form = new FormData();
+    form.append('audio', input.files[0]);
+    submitAudio(form);
+    input.value = '';
 }
 
 // Recording
@@ -19,7 +14,6 @@ let recordStart = null;
 let recordTimer = null;
 
 function toggleRecording() {
-    const btn = document.getElementById('record-btn');
     if (mediaRecorder && mediaRecorder.state === 'recording') {
         stopRecording();
     } else {
@@ -40,7 +34,9 @@ async function startRecording() {
         mediaRecorder.onstop = () => {
             stream.getTracks().forEach(t => t.stop());
             const blob = new Blob(recordedChunks, { type: 'audio/webm' });
-            uploadRecording(blob);
+            const form = new FormData();
+            form.append('audio', blob, 'recording.webm');
+            submitAudio(form);
         };
 
         mediaRecorder.start();
@@ -49,7 +45,7 @@ async function startRecording() {
 
         const btn = document.getElementById('record-btn');
         btn.classList.add('recording');
-        btn.querySelector('span:last-child') && (btn.lastChild.textContent = ' Stop');
+        btn.childNodes[btn.childNodes.length - 1].textContent = ' Stop';
         document.getElementById('record-status').textContent = 'Recording...';
     } catch (err) {
         document.getElementById('record-status').textContent = 'Mic access denied: ' + err.message;
@@ -62,6 +58,7 @@ function stopRecording() {
         clearInterval(recordTimer);
         const btn = document.getElementById('record-btn');
         btn.classList.remove('recording');
+        btn.childNodes[btn.childNodes.length - 1].textContent = ' Record';
         document.getElementById('record-status').textContent = 'Processing...';
     }
 }
@@ -76,45 +73,19 @@ function updateRecordTime() {
     }, 1000);
 }
 
-function uploadRecording(blob) {
-    const form = new FormData();
-    form.append('audio', blob, 'recording.webm');
-
-    htmx.ajax('POST', '/transcribe', {
-        target: '#result',
-        swap: 'innerHTML',
-        values: form,
-    });
-
-    // Manual approach since htmx.ajax with FormData can be tricky
+function submitAudio(form) {
+    document.getElementById('spinner').classList.add('htmx-request');
     fetch('/argraphments/transcribe', { method: 'POST', body: form })
         .then(r => r.text())
         .then(html => {
             document.getElementById('result').innerHTML = html;
             htmx.process(document.getElementById('result'));
+            document.getElementById('record-status').textContent = '';
         })
         .catch(err => {
             document.getElementById('result').innerHTML = '<div class="error">Upload failed: ' + err.message + '</div>';
+        })
+        .finally(() => {
+            document.getElementById('spinner').classList.remove('htmx-request');
         });
-
-    document.getElementById('record-status').textContent = '';
-}
-
-// Drag and drop
-const dropZone = document.getElementById('drop-zone');
-if (dropZone) {
-    dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.style.borderColor = 'var(--accent)';
-    });
-    dropZone.addEventListener('dragleave', () => {
-        dropZone.style.borderColor = '';
-    });
-    dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dropZone.style.borderColor = '';
-        const input = dropZone.querySelector('input');
-        input.files = e.dataTransfer.files;
-        updateFileName(input);
-    });
 }
