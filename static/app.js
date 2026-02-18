@@ -35,6 +35,7 @@ let isRecording = false;
 let diarizeData = null;
 let speakerNames = {};
 let lastAnalyzedTranscript = '';
+let analyzedStatements = []; // accumulated argument structure
 
 const CHUNK_INTERVAL_MS = 10000;
 
@@ -57,6 +58,7 @@ async function startRecording(mode) {
 
     hideInputs();
     lastAnalyzedTranscript = '';
+    analyzedStatements = [];
     document.getElementById('result').innerHTML = `
         <div class="live-session">
             <div class="diarized-view" id="diarized-view">
@@ -169,24 +171,94 @@ async function diarizeAsync(transcript) {
     }
 }
 
-async function analyzeAsync(transcript) {
+async function analyzeAsync(transcript, forceFullReanalysis) {
     try {
         const form = new FormData();
-        form.append('transcript', transcript);
+
+        if (!forceFullReanalysis && lastAnalyzedTranscript && transcript.startsWith(lastAnalyzedTranscript.substring(0, 50))) {
+            // Incremental: only send new text + existing structure
+            const newText = transcript.substring(lastAnalyzedTranscript.length).trim();
+            if (!newText || newText.length < 20) return; // not enough new content
+            form.append('new_text', newText);
+            form.append('existing', JSON.stringify(analyzedStatements));
+        } else {
+            // Full analysis
+            form.append('transcript', transcript);
+        }
+
         const resp = await fetch('/argraphments/analyze-raw', { method: 'POST', body: form });
         if (!resp.ok) return;
-        const html = await resp.text();
+        const data = await resp.json();
+
         lastAnalyzedTranscript = transcript;
 
-        const section = document.getElementById('argument-section');
-        const tree = document.getElementById('argument-tree');
-        if (section && tree) {
-            section.style.display = '';
-            tree.innerHTML = html;
+        if (data.mode === 'full') {
+            analyzedStatements = data.statements || [];
+        } else if (data.mode === 'incremental') {
+            // Append new statements
+            const newStatements = data.statements || [];
+            for (const s of newStatements) {
+                analyzedStatements.push(s);
+            }
         }
+
+        renderArgumentTree();
     } catch (e) {
         console.warn('Analyze failed:', e);
     }
+}
+
+function renderArgumentTree() {
+    const section = document.getElementById('argument-section');
+    const tree = document.getElementById('argument-tree');
+    if (!section || !tree) return;
+
+    if (analyzedStatements.length === 0) return;
+
+    section.style.display = '';
+    tree.innerHTML = renderStatements(analyzedStatements, 0);
+}
+
+function renderStatements(statements, depth) {
+    let html = '';
+    for (const s of statements) {
+        const hasChildren = s.children && s.children.length > 0;
+        const typeClass = s.type || 'claim';
+        const speaker = escapeHtml(s.speaker || '');
+        const text = escapeHtml(s.text || '');
+        const flagged = s.fact_check ? ` flagged flagged-${s.fact_check.verdict}` : '';
+        const factCheckHtml = s.fact_check ? renderFactCheck(s.fact_check) : '';
+
+        html += `<div class="statement depth-${depth} type-${typeClass}${flagged}">`;
+        if (hasChildren) {
+            const count = countDescendants(s);
+            html += `<details open>`;
+            html += `<summary><span class="type-badge">${typeClass}</span> <span class="speaker">${speaker}:</span> ${text} <span class="child-count">(${count})</span>${factCheckHtml}</summary>`;
+            html += `<div class="children">${renderStatements(s.children, depth + 1)}</div>`;
+            html += `</details>`;
+        } else {
+            html += `<div class="leaf"><span class="type-badge">${typeClass}</span> <span class="speaker">${speaker}:</span> ${text}${factCheckHtml}</div>`;
+        }
+        html += `</div>`;
+    }
+    return html;
+}
+
+function renderFactCheck(fc) {
+    const verdict = escapeHtml(fc.verdict);
+    const correction = escapeHtml(fc.correction);
+    const searchURL = 'https://www.google.com/search?q=' + encodeURIComponent(fc.search_query || '');
+    return `<div class="fact-check verdict-${verdict}">
+        <span class="fact-verdict">⚠ ${verdict}</span>
+        <span class="fact-correction">${correction}</span>
+        <a href="${searchURL}" target="_blank" rel="noopener" class="fact-source">verify ↗</a>
+    </div>`;
+}
+
+function countDescendants(s) {
+    let count = (s.children || []).length;
+    for (const c of (s.children || [])) count += countDescendants(c);
+    return count;
 }
 
 const speakerColors = ['#7c6ff0', '#6ec1e4', '#e4c76e', '#7ce4a1', '#e47070', '#b070e4'];
@@ -313,8 +385,10 @@ function showFinalView() {
 
 function runFinalAnalysis() {
     const transcript = buildTranscriptText();
+    analyzedStatements = []; // force full re-analysis
+    lastAnalyzedTranscript = '';
     pendingAnalyze = true;
-    analyzeAsync(transcript).finally(() => { pendingAnalyze = false; });
+    analyzeAsync(transcript, true).finally(() => { pendingAnalyze = false; });
 }
 
 // --- Audio upload → transcribe → diarize ---
@@ -322,6 +396,7 @@ function runFinalAnalysis() {
 async function submitAudioForDiarize(form) {
     hideInputs();
     lastAnalyzedTranscript = '';
+    analyzedStatements = [];
     document.getElementById('spinner').classList.add('htmx-request');
     document.getElementById('result').innerHTML = `
         <div class="live-session">
@@ -371,6 +446,7 @@ async function submitPasteForDiarize(form) {
 
     hideInputs();
     lastAnalyzedTranscript = '';
+    analyzedStatements = [];
     fullTranscript = text;
     diarizeData = null;
     speakerNames = {};

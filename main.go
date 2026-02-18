@@ -180,27 +180,163 @@ func handleTranscribeRaw(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, transcript)
 }
 
-// handleAnalyzeRaw returns just the argument tree HTML fragment
+// handleAnalyzeRaw returns incremental argument analysis as JSON
+// Accepts "new_text" (new portion) and "existing" (JSON of current structure) for incremental mode
+// Or just "transcript" for full analysis
 func handleAnalyzeRaw(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	transcript := r.FormValue("transcript")
-	if strings.TrimSpace(transcript) == "" {
+	newText := strings.TrimSpace(r.FormValue("new_text"))
+	existingJSON := strings.TrimSpace(r.FormValue("existing"))
+	fullTranscript := strings.TrimSpace(r.FormValue("transcript"))
+
+	if newText != "" {
+		// Incremental mode
+		var existing []Statement
+		if existingJSON != "" {
+			json.Unmarshal([]byte(existingJSON), &existing)
+		}
+
+		newStatements, err := extractIncremental(newText, existing)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"mode":       "incremental",
+			"statements": newStatements,
+		})
+	} else if fullTranscript != "" {
+		// Full analysis mode
+		structure, err := extractStructure(fullTranscript)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"mode":       "full",
+			"statements": structure,
+		})
+	} else {
 		http.Error(w, "no transcript", 400)
-		return
 	}
+}
 
-	structure, err := extractStructure(transcript)
+func extractIncremental(newText string, existing []Statement) ([]Statement, error) {
+	// Build a summary of existing structure for context
+	existingSummary := summarizeStatements(existing, 0)
+
+	prompt := `You are analyzing a LIVE conversation incrementally. You've already analyzed earlier parts of the conversation.
+
+EXISTING ANALYSIS (for context only — do NOT repeat these):
+` + existingSummary + `
+
+NEW PORTION OF CONVERSATION to analyze:
+` + newText + `
+
+Return ONLY new statements from the new portion. Each statement has:
+- "speaker": who said it (use same speaker labels as existing analysis)
+- "text": the core claim or statement (paraphrased concisely)
+- "type": one of "claim", "response", "question", "agreement", "rebuttal", "tangent", "clarification", "evidence"
+- "children": array of sub-statements (only if there are direct responses within the new text)
+- "parent_text": if this new statement is a direct response to an EXISTING statement, include the text of that existing statement here (so we can nest it). Omit if it's a new top-level statement.
+- "fact_check": ONLY if the statement contains an objectively false/misleading factual claim. Object with "verdict" (false/misleading/unverified/mostly-true), "correction", "search_query".
+
+Rules:
+- Only return statements from the NEW text
+- Do NOT regenerate or repeat existing statements
+- If the new text is just continuation of the same topic with no new claims, return an empty array
+- Keep speaker labels consistent with existing analysis
+- Only flag objective factual claims, not opinions
+
+Return ONLY valid JSON array, no markdown fences.`
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"model":      "claude-sonnet-4-20250514",
+		"max_tokens": 4096,
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+	})
+
+	req, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(reqBody))
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+		return nil, err
+	}
+	req.Header.Set("x-api-key", anthropicKey)
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("claude API %d: %s", resp.StatusCode, string(body))
 	}
 
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, renderStructureRaw(structure))
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Content) == 0 {
+		return nil, fmt.Errorf("empty response")
+	}
+
+	text := strings.TrimSpace(result.Content[0].Text)
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+
+	// Parse — these may have an extra "parent_text" field
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(text), &raw); err != nil {
+		return nil, fmt.Errorf("parse error: %v", err)
+	}
+
+	var statements []Statement
+	for _, r := range raw {
+		var s struct {
+			Statement
+			ParentText string `json:"parent_text"`
+		}
+		json.Unmarshal(r, &s)
+		// ParentText is handled client-side for nesting
+		s.Statement.Type = strings.ToLower(s.Statement.Type)
+		statements = append(statements, s.Statement)
+	}
+
+	return statements, nil
+}
+
+func summarizeStatements(statements []Statement, depth int) string {
+	if len(statements) == 0 {
+		return "(none yet)"
+	}
+	var sb strings.Builder
+	for _, s := range statements {
+		indent := strings.Repeat("  ", depth)
+		sb.WriteString(fmt.Sprintf("%s- [%s] %s: %s\n", indent, s.Type, s.Speaker, s.Text))
+		if len(s.Children) > 0 {
+			sb.WriteString(summarizeStatements(s.Children, depth+1))
+		}
+	}
+	return sb.String()
 }
 
 func renderStructureRaw(statements []Statement) string {
