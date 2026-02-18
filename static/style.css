@@ -133,6 +133,16 @@ textarea:focus { outline: none; border-color: var(--accent-dim); }
     margin: 0.25rem 0;
     padding-left: 0.5rem;
     border-left: 2px solid var(--border);
+    transition: opacity 0.3s, transform 0.3s;
+}
+.stmt-entering {
+    opacity: 0;
+    transform: translateY(-8px);
+}
+.stmt-removing {
+    opacity: 0;
+    transform: translateX(20px);
+    pointer-events: none;
 }
 
 details > summary {

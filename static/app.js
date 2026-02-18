@@ -59,6 +59,7 @@ async function startRecording(mode) {
     hideInputs();
     lastAnalyzedTranscript = '';
     analyzedStatements = [];
+    statementIdCounter = 0;
     document.getElementById('result').innerHTML = `
         <div class="live-session">
             <div class="diarized-view" id="diarized-view">
@@ -208,43 +209,156 @@ async function analyzeAsync(transcript, forceFullReanalysis) {
     }
 }
 
+// --- Stable tree rendering with DOM diffing ---
+
+let statementIdCounter = 0;
+
+// Assign stable IDs to all statements that don't have one
+function assignIds(statements) {
+    for (const s of statements) {
+        if (!s._id) s._id = 'stmt-' + (++statementIdCounter);
+        if (s.children) assignIds(s.children);
+    }
+}
+
 function renderArgumentTree() {
     const section = document.getElementById('argument-section');
     const tree = document.getElementById('argument-tree');
     if (!section || !tree) return;
-
     if (analyzedStatements.length === 0) return;
 
     section.style.display = '';
-    tree.innerHTML = renderStatements(analyzedStatements, 0);
+    assignIds(analyzedStatements);
+    diffChildren(tree, analyzedStatements, 0);
 }
 
-function renderStatements(statements, depth) {
-    let html = '';
-    for (const s of statements) {
-        const hasChildren = s.children && s.children.length > 0;
-        const typeClass = s.type || 'claim';
-        const speaker = escapeHtml(s.speaker || '');
-        const text = escapeHtml(s.text || '');
-        const flagged = s.fact_check ? ` flagged flagged-${s.fact_check.verdict}` : '';
-        const factCheckHtml = s.fact_check ? renderFactCheck(s.fact_check) : '';
-
-        html += `<div class="statement depth-${depth} type-${typeClass}${flagged}">`;
-        if (hasChildren) {
-            const count = countDescendants(s);
-            html += `<details open>`;
-            html += `<summary><span class="type-badge">${typeClass}</span> <span class="speaker">${speaker}:</span> ${text} <span class="child-count">(${count})</span>${factCheckHtml}</summary>`;
-            html += `<div class="children">${renderStatements(s.children, depth + 1)}</div>`;
-            html += `</details>`;
-        } else {
-            html += `<div class="leaf"><span class="type-badge">${typeClass}</span> <span class="speaker">${speaker}:</span> ${text}${factCheckHtml}</div>`;
-        }
-        html += `</div>`;
+// Diff a container's children against the desired statement list
+function diffChildren(container, statements, depth) {
+    const existingById = {};
+    for (const child of Array.from(container.children)) {
+        const id = child.dataset.stmtId;
+        if (id) existingById[id] = child;
     }
-    return html;
+
+    const desiredIds = new Set(statements.map(s => s._id));
+
+    // Remove statements no longer in the list
+    for (const [id, el] of Object.entries(existingById)) {
+        if (!desiredIds.has(id)) {
+            el.classList.add('stmt-removing');
+            setTimeout(() => el.remove(), 300);
+        }
+    }
+
+    // Add or update each statement in order
+    let prevEl = null;
+    for (const s of statements) {
+        let el = existingById[s._id];
+        if (!el) {
+            // New statement — create and insert
+            el = createStatementEl(s, depth);
+            el.classList.add('stmt-entering');
+            requestAnimationFrame(() => el.classList.remove('stmt-entering'));
+
+            if (prevEl && prevEl.nextSibling) {
+                container.insertBefore(el, prevEl.nextSibling);
+            } else if (!prevEl) {
+                container.insertBefore(el, container.firstChild);
+            } else {
+                container.appendChild(el);
+            }
+        } else {
+            // Existing — update content if changed, don't rebuild
+            updateStatementEl(el, s, depth);
+        }
+
+        // Recurse into children
+        if (s.children && s.children.length > 0) {
+            let childrenContainer = el.querySelector(':scope > details > .children');
+            if (!childrenContainer) {
+                // Convert from leaf to parent with details
+                rebuildAsParent(el, s, depth);
+                childrenContainer = el.querySelector(':scope > details > .children');
+            }
+            if (childrenContainer) {
+                assignIds(s.children);
+                diffChildren(childrenContainer, s.children, depth + 1);
+            }
+        }
+
+        prevEl = el;
+    }
 }
 
-function renderFactCheck(fc) {
+function createStatementEl(s, depth) {
+    const div = document.createElement('div');
+    div.dataset.stmtId = s._id;
+    populateStatementEl(div, s, depth);
+    return div;
+}
+
+function populateStatementEl(div, s, depth) {
+    const typeClass = s.type || 'claim';
+    const flagged = s.fact_check ? ` flagged flagged-${s.fact_check.verdict}` : '';
+    div.className = `statement depth-${depth} type-${typeClass}${flagged}`;
+
+    const speaker = escapeHtml(s.speaker || '');
+    const text = escapeHtml(s.text || '');
+    const factCheckHtml = s.fact_check ? renderFactCheckHtml(s.fact_check) : '';
+    const hasChildren = s.children && s.children.length > 0;
+
+    if (hasChildren) {
+        const count = countDescendants(s);
+        div.innerHTML = `<details open>
+            <summary><span class="type-badge">${typeClass}</span> <span class="speaker">${speaker}:</span> ${text} <span class="child-count">(${count})</span>${factCheckHtml}</summary>
+            <div class="children"></div>
+        </details>`;
+    } else {
+        div.innerHTML = `<div class="leaf"><span class="type-badge">${typeClass}</span> <span class="speaker">${speaker}:</span> ${text}${factCheckHtml}</div>`;
+    }
+}
+
+function updateStatementEl(el, s, depth) {
+    // Only update if content actually changed
+    const key = `${s.type}|${s.speaker}|${s.text}|${JSON.stringify(s.fact_check || '')}`;
+    if (el.dataset.contentKey === key) return;
+    el.dataset.contentKey = key;
+
+    const typeClass = s.type || 'claim';
+    const flagged = s.fact_check ? ` flagged flagged-${s.fact_check.verdict}` : '';
+    el.className = `statement depth-${depth} type-${typeClass}${flagged}`;
+
+    const speaker = escapeHtml(s.speaker || '');
+    const text = escapeHtml(s.text || '');
+    const factCheckHtml = s.fact_check ? renderFactCheckHtml(s.fact_check) : '';
+    const hasChildren = s.children && s.children.length > 0;
+
+    // Update the summary/leaf text without destroying the children container
+    const summary = el.querySelector(':scope > details > summary');
+    if (summary) {
+        const count = countDescendants(s);
+        summary.innerHTML = `<span class="type-badge">${typeClass}</span> <span class="speaker">${speaker}:</span> ${text} <span class="child-count">(${count})</span>${factCheckHtml}`;
+    } else {
+        const leaf = el.querySelector(':scope > .leaf');
+        if (leaf) {
+            leaf.innerHTML = `<span class="type-badge">${typeClass}</span> <span class="speaker">${speaker}:</span> ${text}${factCheckHtml}`;
+        }
+    }
+}
+
+function rebuildAsParent(el, s, depth) {
+    const typeClass = s.type || 'claim';
+    const speaker = escapeHtml(s.speaker || '');
+    const text = escapeHtml(s.text || '');
+    const factCheckHtml = s.fact_check ? renderFactCheckHtml(s.fact_check) : '';
+    const count = countDescendants(s);
+    el.innerHTML = `<details open>
+        <summary><span class="type-badge">${typeClass}</span> <span class="speaker">${speaker}:</span> ${text} <span class="child-count">(${count})</span>${factCheckHtml}</summary>
+        <div class="children"></div>
+    </details>`;
+}
+
+function renderFactCheckHtml(fc) {
     const verdict = escapeHtml(fc.verdict);
     const correction = escapeHtml(fc.correction);
     const searchURL = 'https://www.google.com/search?q=' + encodeURIComponent(fc.search_query || '');
