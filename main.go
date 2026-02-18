@@ -47,6 +47,7 @@ func main() {
 	mux.HandleFunc(prefix+"/analyze", handleAnalyze)
 	mux.HandleFunc(prefix+"/transcribe-raw", handleTranscribeRaw)
 	mux.HandleFunc(prefix+"/diarize", handleDiarize)
+	mux.HandleFunc(prefix+"/analyze-raw", handleAnalyzeRaw)
 	mux.Handle(prefix+"/static/", http.StripPrefix(prefix+"/static/", http.FileServer(http.Dir("static"))))
 
 	port := getEnv("PORT", "8086")
@@ -176,6 +177,39 @@ func handleTranscribeRaw(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprint(w, transcript)
+}
+
+// handleAnalyzeRaw returns just the argument tree HTML fragment
+func handleAnalyzeRaw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	transcript := r.FormValue("transcript")
+	if strings.TrimSpace(transcript) == "" {
+		http.Error(w, "no transcript", 400)
+		return
+	}
+
+	structure, err := extractStructure(transcript)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprint(w, renderStructureRaw(structure))
+}
+
+func renderStructureRaw(statements []Statement) string {
+	var sb strings.Builder
+	sb.WriteString(`<div class="argument-tree">`)
+	for _, s := range statements {
+		renderStatement(&sb, s, 0)
+	}
+	sb.WriteString(`</div>`)
+	return sb.String()
 }
 
 // handleDiarize takes raw transcript, returns speaker-labeled JSON

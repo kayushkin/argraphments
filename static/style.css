@@ -28,7 +28,7 @@ body {
 }
 
 .container {
-    max-width: 900px;
+    max-width: 1200px;
     margin: 0 auto;
     padding: 2rem 1.5rem;
 }
@@ -220,8 +220,25 @@ details > summary:hover { background: var(--surface); }
 header, .input-section { transition: opacity 0.3s, max-height 0.3s; overflow: hidden; }
 .hidden-section { opacity: 0; max-height: 0; margin: 0; padding: 0; pointer-events: none; }
 
+/* Live session layout */
+.live-session { margin-top: 0.5rem; }
+
+@media (min-width: 800px) {
+    .live-session {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+    }
+    .analyze-form { grid-column: 1 / -1; }
+}
+
+.argument-section {
+    max-height: 600px;
+    overflow-y: auto;
+}
+
 /* Diarized chat view */
-.diarized-view { margin-top: 0.5rem; }
+.diarized-view { }
 
 .speaker-names {
     display: flex;

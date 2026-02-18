@@ -28,11 +28,13 @@ let chunkInterval = null;
 let fullTranscript = '';
 let pendingTranscribe = false;
 let pendingDiarize = false;
+let pendingAnalyze = false;
 let isRecording = false;
 
 // Diarization state
 let diarizeData = null;
 let speakerNames = {};
+let lastAnalyzedTranscript = '';
 
 const CHUNK_INTERVAL_MS = 10000;
 
@@ -54,13 +56,19 @@ async function startRecording(mode) {
     speakerNames = {};
 
     hideInputs();
+    lastAnalyzedTranscript = '';
     document.getElementById('result').innerHTML = `
-        <div class="diarized-view" id="diarized-view">
-            <div class="speaker-names" id="speaker-names-section" style="display:none">
-                <div class="speaker-list" id="speaker-list"></div>
+        <div class="live-session">
+            <div class="diarized-view" id="diarized-view">
+                <div class="speaker-names" id="speaker-names-section" style="display:none">
+                    <div class="speaker-list" id="speaker-list"></div>
+                </div>
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-msg"><span class="chat-text interim">Listening...</span></div>
+                </div>
             </div>
-            <div class="chat-messages" id="chat-messages">
-                <div class="chat-msg"><span class="chat-text interim">Listening...</span></div>
+            <div class="argument-section" id="argument-section" style="display:none">
+                <div id="argument-tree"></div>
             </div>
         </div>`;
 
@@ -149,8 +157,35 @@ async function diarizeAsync(transcript) {
             }
         }
         renderChatMessages();
+
+        // Trigger live analysis if transcript has grown enough
+        const currentTranscript = buildTranscriptText();
+        if (!pendingAnalyze && currentTranscript.length > lastAnalyzedTranscript.length + 50) {
+            pendingAnalyze = true;
+            analyzeAsync(currentTranscript).finally(() => { pendingAnalyze = false; });
+        }
     } catch (e) {
         console.warn('Diarize failed:', e);
+    }
+}
+
+async function analyzeAsync(transcript) {
+    try {
+        const form = new FormData();
+        form.append('transcript', transcript);
+        const resp = await fetch('/argraphments/analyze-raw', { method: 'POST', body: form });
+        if (!resp.ok) return;
+        const html = await resp.text();
+        lastAnalyzedTranscript = transcript;
+
+        const section = document.getElementById('argument-section');
+        const tree = document.getElementById('argument-tree');
+        if (section && tree) {
+            section.style.display = '';
+            tree.innerHTML = html;
+        }
+    } catch (e) {
+        console.warn('Analyze failed:', e);
     }
 }
 
@@ -252,40 +287,54 @@ function stopRecording() {
 function showFinalView() {
     document.getElementById('record-status').textContent = '';
 
-    // Add the analyze button below the chat
-    const container = document.getElementById('diarized-view');
-    if (!container) return;
+    // Add action buttons below everything
+    const session = document.querySelector('.live-session');
+    if (!session) return;
 
-    // Remove any existing analyze form
-    const existing = container.querySelector('.analyze-form');
+    const existing = session.querySelector('.analyze-form');
     if (existing) existing.remove();
 
     const formDiv = document.createElement('div');
     formDiv.className = 'analyze-form';
     formDiv.innerHTML = `
         <div class="action-row">
-            <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner" style="display:inline">
-                <textarea name="transcript" style="display:none"></textarea>
-                <button type="submit" class="btn" onclick="this.previousElementSibling.value = buildTranscriptText()">Analyze Structure</button>
-            </form>
+            <button class="btn" onclick="runFinalAnalysis()">Re-analyze</button>
             <button class="btn btn-secondary" onclick="showInputs()">New</button>
         </div>`;
-    container.appendChild(formDiv);
-    htmx.process(formDiv);
+    session.appendChild(formDiv);
+
+    // If we haven't analyzed yet or transcript grew, do a final analysis
+    const currentTranscript = buildTranscriptText();
+    if (currentTranscript !== lastAnalyzedTranscript) {
+        pendingAnalyze = true;
+        analyzeAsync(currentTranscript).finally(() => { pendingAnalyze = false; });
+    }
+}
+
+function runFinalAnalysis() {
+    const transcript = buildTranscriptText();
+    pendingAnalyze = true;
+    analyzeAsync(transcript).finally(() => { pendingAnalyze = false; });
 }
 
 // --- Audio upload → transcribe → diarize ---
 
 async function submitAudioForDiarize(form) {
     hideInputs();
+    lastAnalyzedTranscript = '';
     document.getElementById('spinner').classList.add('htmx-request');
     document.getElementById('result').innerHTML = `
-        <div class="diarized-view" id="diarized-view">
-            <div class="speaker-names" id="speaker-names-section" style="display:none">
-                <div class="speaker-list" id="speaker-list"></div>
+        <div class="live-session">
+            <div class="diarized-view" id="diarized-view">
+                <div class="speaker-names" id="speaker-names-section" style="display:none">
+                    <div class="speaker-list" id="speaker-list"></div>
+                </div>
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-msg"><span class="chat-text interim">Transcribing...</span></div>
+                </div>
             </div>
-            <div class="chat-messages" id="chat-messages">
-                <div class="chat-msg"><span class="chat-text interim">Transcribing...</span></div>
+            <div class="argument-section" id="argument-section" style="display:none">
+                <div id="argument-tree"></div>
             </div>
         </div>`;
 
@@ -321,17 +370,23 @@ async function submitPasteForDiarize(form) {
     if (!text) return;
 
     hideInputs();
+    lastAnalyzedTranscript = '';
     fullTranscript = text;
     diarizeData = null;
     speakerNames = {};
 
     document.getElementById('result').innerHTML = `
-        <div class="diarized-view" id="diarized-view">
-            <div class="speaker-names" id="speaker-names-section" style="display:none">
-                <div class="speaker-list" id="speaker-list"></div>
+        <div class="live-session">
+            <div class="diarized-view" id="diarized-view">
+                <div class="speaker-names" id="speaker-names-section" style="display:none">
+                    <div class="speaker-list" id="speaker-list"></div>
+                </div>
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-msg"><span class="chat-text interim">Identifying speakers...</span></div>
+                </div>
             </div>
-            <div class="chat-messages" id="chat-messages">
-                <div class="chat-msg"><span class="chat-text interim">Identifying speakers...</span></div>
+            <div class="argument-section" id="argument-section" style="display:none">
+                <div id="argument-tree"></div>
             </div>
         </div>`;
 
