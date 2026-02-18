@@ -103,10 +103,8 @@ async function startRecording(mode) {
         // Pipeline: transcribe chunk → diarize result → update UI, every CHUNK_INTERVAL_MS
         chunkInterval = setInterval(() => processChunk(), CHUNK_INTERVAL_MS);
 
-        const btn = document.getElementById(mode === 'tab' ? 'tab-record-btn' : 'record-btn');
-        btn.classList.add('recording');
-        btn.childNodes[btn.childNodes.length - 1].textContent = ' Stop';
-        document.getElementById('record-status').textContent = mode === 'tab' ? 'Capturing tab audio...' : 'Recording...';
+        document.getElementById('recording-bar').style.display = '';
+        document.getElementById('record-status').textContent = '';
     } catch (err) {
         isRecording = false;
         document.getElementById('record-status').textContent = err.message;
@@ -442,13 +440,11 @@ function stopRecording() {
     isRecording = false;
     clearInterval(chunkInterval);
 
+    document.getElementById('recording-bar').style.display = 'none';
+
     if (mediaRecorder) {
         mediaRecorder.stop();
         clearInterval(recordTimer);
-        const btn = document.getElementById(activeMode === 'tab' ? 'tab-record-btn' : 'record-btn');
-        btn.classList.remove('recording');
-        btn.childNodes[btn.childNodes.length - 1].textContent = activeMode === 'tab' ? ' Tab Audio' : ' Mic';
-        document.getElementById('record-status').textContent = 'Finalizing...';
     }
 
     if (recordedChunks.length > 0) {
@@ -593,11 +589,14 @@ function escapeHtml(text) {
 }
 
 function updateRecordTime() {
-    const el = document.getElementById('record-time');
     recordTimer = setInterval(() => {
         const elapsed = Math.floor((Date.now() - recordStart) / 1000);
         const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
         const s = String(elapsed % 60).padStart(2, '0');
-        el.textContent = m + ':' + s;
+        const time = m + ':' + s;
+        const el = document.getElementById('record-time');
+        const bar = document.getElementById('recording-bar-time');
+        if (el) el.textContent = time;
+        if (bar) bar.textContent = time;
     }, 1000);
 }

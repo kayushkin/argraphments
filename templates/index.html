@@ -31,12 +31,18 @@
             </div>
 
             <div id="record-status"></div>
+        </div>
+
+        <div class="recording-bar" id="recording-bar" style="display:none">
+            <span class="record-dot recording"></span>
+            <span id="recording-bar-time" class="record-time">00:00</span>
+            <button class="btn btn-stop" onclick="stopRecording()">Stop</button>
+        </div>
 
             <form onsubmit="event.preventDefault(); submitPasteForDiarize(this);">
                 <textarea name="transcript" rows="8" placeholder="Or paste a conversation transcript here..."></textarea>
                 <button type="submit" class="btn">Analyze</button>
             </form>
-        </div>
 
         <div id="spinner" class="htmx-indicator">
             <div class="spinner"></div>
