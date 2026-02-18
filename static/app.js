@@ -1,3 +1,14 @@
+function hideInputs() {
+    document.getElementById('header').classList.add('hidden-section');
+    document.getElementById('input-section').classList.add('hidden-section');
+}
+
+function showInputs() {
+    document.getElementById('header').classList.remove('hidden-section');
+    document.getElementById('input-section').classList.remove('hidden-section');
+    document.getElementById('result').innerHTML = '';
+}
+
 // Upload file
 function uploadFile(input) {
     if (!input.files[0]) return;
@@ -42,10 +53,10 @@ async function startRecording(mode) {
     diarizeData = null;
     speakerNames = {};
 
+    hideInputs();
     document.getElementById('result').innerHTML = `
         <div class="diarized-view" id="diarized-view">
             <div class="speaker-names" id="speaker-names-section" style="display:none">
-                <h3>Speakers</h3>
                 <div class="speaker-list" id="speaker-list"></div>
             </div>
             <div class="chat-messages" id="chat-messages">
@@ -156,7 +167,6 @@ function renderChatMessages() {
     if (!diarizeData) return;
     const colorMap = getColorMap();
 
-    // Update speaker name inputs
     const section = document.getElementById('speaker-names-section');
     const list = document.getElementById('speaker-list');
     if (section && list) {
@@ -253,10 +263,13 @@ function showFinalView() {
     const formDiv = document.createElement('div');
     formDiv.className = 'analyze-form';
     formDiv.innerHTML = `
-        <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner">
-            <textarea name="transcript" style="display:none"></textarea>
-            <button type="submit" class="btn" onclick="this.previousElementSibling.value = buildTranscriptText()">Analyze Structure</button>
-        </form>`;
+        <div class="action-row">
+            <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner" style="display:inline">
+                <textarea name="transcript" style="display:none"></textarea>
+                <button type="submit" class="btn" onclick="this.previousElementSibling.value = buildTranscriptText()">Analyze Structure</button>
+            </form>
+            <button class="btn btn-secondary" onclick="showInputs()">New</button>
+        </div>`;
     container.appendChild(formDiv);
     htmx.process(formDiv);
 }
@@ -264,11 +277,11 @@ function showFinalView() {
 // --- Audio upload → transcribe → diarize ---
 
 async function submitAudioForDiarize(form) {
+    hideInputs();
     document.getElementById('spinner').classList.add('htmx-request');
     document.getElementById('result').innerHTML = `
         <div class="diarized-view" id="diarized-view">
             <div class="speaker-names" id="speaker-names-section" style="display:none">
-                <h3>Speakers</h3>
                 <div class="speaker-list" id="speaker-list"></div>
             </div>
             <div class="chat-messages" id="chat-messages">
@@ -307,6 +320,7 @@ async function submitPasteForDiarize(form) {
     const text = form.querySelector('textarea').value.trim();
     if (!text) return;
 
+    hideInputs();
     fullTranscript = text;
     diarizeData = null;
     speakerNames = {};
@@ -314,7 +328,6 @@ async function submitPasteForDiarize(form) {
     document.getElementById('result').innerHTML = `
         <div class="diarized-view" id="diarized-view">
             <div class="speaker-names" id="speaker-names-section" style="display:none">
-                <h3>Speakers</h3>
                 <div class="speaker-list" id="speaker-list"></div>
             </div>
             <div class="chat-messages" id="chat-messages">

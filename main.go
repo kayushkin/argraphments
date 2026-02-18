@@ -439,6 +439,7 @@ func renderStructure(statements []Statement) string {
 		renderStatement(&sb, s, 0)
 	}
 	sb.WriteString(`</div>`)
+	sb.WriteString(`<div class="action-row"><button class="btn btn-secondary" onclick="showInputs()">New</button></div>`)
 	return sb.String()
 }
 
