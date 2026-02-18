@@ -188,6 +188,36 @@ details > summary:hover { background: var(--surface); }
     color: var(--text-dim);
 }
 
+/* Fact checking */
+.flagged { border-left-color: var(--rebuttal) !important; }
+.fact-check {
+    display: block;
+    margin-top: 0.35rem;
+    padding: 0.3rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    background: rgba(228, 112, 112, 0.1);
+    border: 1px solid rgba(228, 112, 112, 0.25);
+}
+.fact-verdict {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 0.4rem;
+}
+.verdict-false .fact-verdict { color: var(--rebuttal); }
+.verdict-misleading .fact-verdict { color: var(--question); }
+.verdict-unverified .fact-verdict { color: var(--text-dim); }
+.verdict-mostly-true .fact-verdict { color: var(--agreement); }
+.fact-correction { color: var(--text); }
+.fact-source {
+    margin-left: 0.5rem;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.75rem;
+}
+.fact-source:hover { text-decoration: underline; }
+
 /* Depth indentation colors */
 .depth-0 { border-left-color: var(--accent); }
 .depth-1 { border-left-color: var(--claim); }

@@ -9,6 +9,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -379,33 +380,45 @@ func whisperTranscribe(filePath string) (string, error) {
 // --- Claude API for structure extraction ---
 
 type Statement struct {
-	Speaker  string      `json:"speaker"`
-	Text     string      `json:"text"`
-	Type     string      `json:"type"` // claim, response, question, agreement, rebuttal, tangent
-	Children []Statement `json:"children"`
+	Speaker   string      `json:"speaker"`
+	Text      string      `json:"text"`
+	Type      string      `json:"type"` // claim, response, question, agreement, rebuttal, tangent
+	Children  []Statement `json:"children"`
+	FactCheck *FactCheck  `json:"fact_check,omitempty"`
+}
+
+type FactCheck struct {
+	Verdict     string `json:"verdict"`      // "false", "misleading", "unverified", "mostly-true"
+	Correction  string `json:"correction"`   // what's actually true
+	SearchQuery string `json:"search_query"` // google search query to verify
 }
 
 func extractStructure(transcript string) ([]Statement, error) {
 	prompt := `Analyze this conversation transcript and extract a nested argument/discussion structure.
 
 IMPORTANT — Speaker identification:
-The transcript may not have speaker labels. You MUST identify distinct speakers from context clues:
-- Changes in position/opinion (one person argues for X, another against)
-- Turn-taking patterns, conversational flow
-- Different speaking styles, vocabulary, or perspectives
-- Phrases like "I disagree", "but", "well actually" often signal a speaker change
-- Questions followed by answers typically involve different speakers
-Label them as "Speaker 1", "Speaker 2", etc. Be consistent — the same person should always get the same label. If it's clearly a monologue, use a single speaker.
+The transcript may already have speaker labels (e.g. "Speaker 1: ..." or names). If so, use them directly.
+If not, identify distinct speakers from context clues: opinion shifts, turn-taking, different perspectives.
+Be consistent — the same person should always get the same label.
 
 Return a JSON array of top-level statements. Each statement has:
-- "speaker": who said it (use "Speaker 1", "Speaker 2" etc)
+- "speaker": who said it
 - "text": the core claim or statement (paraphrased concisely)
 - "type": one of "claim", "response", "question", "agreement", "rebuttal", "tangent", "clarification", "evidence"
 - "children": array of statements that are direct responses/follow-ups to this one
+- "fact_check": ONLY include this field if the statement contains a factual claim that is false, misleading, or dubiously inaccurate based on your knowledge. Object with:
+  - "verdict": one of "false", "misleading", "unverified", "mostly-true"
+  - "correction": brief explanation of what's actually true
+  - "search_query": a Google search query the user can use to verify
 
-Nest responses under the statement they're responding to. A rebuttal to a claim goes as a child of that claim. Agreement goes as a child. Follow-up questions go as children of what they're asking about.
+Nest responses under the statement they're responding to. A rebuttal to a claim goes as a child of that claim.
 
-The goal is to show the STRUCTURE of the conversation — how ideas branch and relate — not just a linear transcript.
+FACT-CHECKING RULES:
+- Only flag objective factual claims, NOT opinions or subjective statements
+- "I think X is better" = opinion, don't flag
+- "X was invented in 1990" = factual, flag if wrong
+- Be conservative — only flag things you're confident about
+- Include fact_check field ONLY on flagged statements, omit it otherwise
 
 Return ONLY valid JSON, no markdown fences.
 
@@ -483,22 +496,44 @@ func renderStatement(sb *strings.Builder, s Statement, depth int) {
 	speaker := template.HTMLEscapeString(s.Speaker)
 	text := template.HTMLEscapeString(s.Text)
 
-	sb.WriteString(fmt.Sprintf(`<div class="statement depth-%d type-%s"`, depth, typeClass))
+	flagged := ""
+	if s.FactCheck != nil {
+		flagged = " flagged flagged-" + template.HTMLEscapeString(s.FactCheck.Verdict)
+	}
+
+	sb.WriteString(fmt.Sprintf(`<div class="statement depth-%d type-%s%s"`, depth, typeClass, flagged))
 	sb.WriteString(` >`)
+
+	factCheckHTML := renderFactCheck(s.FactCheck)
 
 	if hasChildren {
 		sb.WriteString(`<details>`)
-		sb.WriteString(fmt.Sprintf(`<summary><span class="type-badge">%s</span> <span class="speaker">%s:</span> %s <span class="child-count">(%d)</span></summary>`, typeClass, speaker, text, countDescendants(s)))
+		sb.WriteString(fmt.Sprintf(`<summary><span class="type-badge">%s</span> <span class="speaker">%s:</span> %s <span class="child-count">(%d)</span>%s</summary>`, typeClass, speaker, text, countDescendants(s), factCheckHTML))
 		sb.WriteString(`<div class="children">`)
 		for _, child := range s.Children {
 			renderStatement(sb, child, depth+1)
 		}
 		sb.WriteString(`</div></details>`)
 	} else {
-		sb.WriteString(fmt.Sprintf(`<div class="leaf"><span class="type-badge">%s</span> <span class="speaker">%s:</span> %s</div>`, typeClass, speaker, text))
+		sb.WriteString(fmt.Sprintf(`<div class="leaf"><span class="type-badge">%s</span> <span class="speaker">%s:</span> %s%s</div>`, typeClass, speaker, text, factCheckHTML))
 	}
 
 	sb.WriteString(`</div>`)
+}
+
+func renderFactCheck(fc *FactCheck) string {
+	if fc == nil {
+		return ""
+	}
+	verdict := template.HTMLEscapeString(fc.Verdict)
+	correction := template.HTMLEscapeString(fc.Correction)
+	searchURL := "https://www.google.com/search?q=" + url.QueryEscape(fc.SearchQuery)
+
+	return fmt.Sprintf(`<div class="fact-check verdict-%s">
+		<span class="fact-verdict">⚠ %s</span>
+		<span class="fact-correction">%s</span>
+		<a href="%s" target="_blank" rel="noopener" class="fact-source">verify ↗</a>
+	</div>`, verdict, verdict, correction, searchURL)
 }
 
 func countDescendants(s Statement) int {
