@@ -45,6 +45,7 @@ func main() {
 	mux.HandleFunc(prefix+"/", handleIndex)
 	mux.HandleFunc(prefix+"/transcribe", handleTranscribe)
 	mux.HandleFunc(prefix+"/analyze", handleAnalyze)
+	mux.HandleFunc(prefix+"/transcribe-raw", handleTranscribeRaw)
 	mux.Handle(prefix+"/static/", http.StripPrefix(prefix+"/static/", http.FileServer(http.Dir("static"))))
 
 	port := getEnv("PORT", "8086")
@@ -134,6 +135,46 @@ func handleAnalyze(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(w, renderStructure(structure))
+}
+
+// handleTranscribeRaw returns plain text transcript (for live chunked transcription)
+func handleTranscribeRaw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.ParseMultipartForm(50 << 20)
+
+	file, header, err := r.FormFile("audio")
+	if err != nil {
+		http.Error(w, "no audio file", 400)
+		return
+	}
+	defer file.Close()
+
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = ".webm"
+	}
+	tmpPath := fmt.Sprintf("uploads/%d%s", time.Now().UnixNano(), ext)
+	dst, err := os.Create(tmpPath)
+	if err != nil {
+		http.Error(w, "failed to save", 500)
+		return
+	}
+	io.Copy(dst, file)
+	dst.Close()
+	defer os.Remove(tmpPath)
+
+	transcript, err := whisperTranscribe(tmpPath)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprint(w, transcript)
 }
 
 func htmxError(w http.ResponseWriter, msg string) {

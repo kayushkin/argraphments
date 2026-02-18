@@ -13,9 +13,12 @@ let recordedChunks = [];
 let recordStart = null;
 let recordTimer = null;
 let activeMode = null;
-let recognition = null;
-let finalTranscript = '';
-let interimTranscript = '';
+let chunkInterval = null;
+let fullTranscript = '';
+let chunkIndex = 0;
+let pendingChunk = false;
+
+const CHUNK_INTERVAL_MS = 10000; // send to Whisper every 10s
 
 function toggleRecording(mode) {
     if (mediaRecorder && mediaRecorder.state === 'recording') {
@@ -27,14 +30,14 @@ function toggleRecording(mode) {
 
 async function startRecording(mode) {
     activeMode = mode;
-    finalTranscript = '';
-    interimTranscript = '';
+    fullTranscript = '';
+    chunkIndex = 0;
+    pendingChunk = false;
 
-    // Show live transcript area
     document.getElementById('result').innerHTML = `
         <div class="live-transcript">
             <h2>Live Transcript</h2>
-            <div id="live-text" class="live-text"></div>
+            <div id="live-text" class="live-text"><span class="interim">Listening...</span></div>
         </div>`;
 
     try {
@@ -53,22 +56,25 @@ async function startRecording(mode) {
             stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         }
 
-        // Start media recorder for backup Whisper transcription
         recordedChunks = [];
         mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+
         mediaRecorder.ondataavailable = (e) => {
             if (e.data.size > 0) recordedChunks.push(e.data);
         };
+
         mediaRecorder.onstop = () => {
             stream.getTracks().forEach(t => t.stop());
         };
-        mediaRecorder.start(1000); // collect in 1s chunks
 
-        // Start speech recognition for live transcription
-        startSpeechRecognition();
+        // Collect data frequently so we can slice chunks
+        mediaRecorder.start(1000);
 
         recordStart = Date.now();
         updateRecordTime();
+
+        // Send chunks to Whisper periodically
+        chunkInterval = setInterval(() => sendChunk(), CHUNK_INTERVAL_MS);
 
         const btn = document.getElementById(mode === 'tab' ? 'tab-record-btn' : 'record-btn');
         btn.classList.add('recording');
@@ -80,60 +86,41 @@ async function startRecording(mode) {
     }
 }
 
-function startSpeechRecognition() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-        document.getElementById('live-text').textContent = '(Live transcription not supported in this browser — recording will be sent to Whisper when done)';
-        return;
-    }
+async function sendChunk() {
+    if (pendingChunk || recordedChunks.length === 0) return;
+    pendingChunk = true;
 
-    recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    // Send all accumulated audio so far (full recording up to now)
+    // This way Whisper has full context and we just take the new text
+    const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+    const form = new FormData();
+    form.append('audio', blob, 'chunk.webm');
 
-    recognition.onresult = (event) => {
-        interimTranscript = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-            const text = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-                finalTranscript += text + ' ';
-            } else {
-                interimTranscript += text;
+    try {
+        const resp = await fetch('/argraphments/transcribe-raw', { method: 'POST', body: form });
+        if (resp.ok) {
+            const text = await resp.text();
+            if (text.trim()) {
+                fullTranscript = text.trim();
+                updateLiveText();
             }
         }
-        updateLiveText();
-    };
-
-    recognition.onerror = (event) => {
-        // 'no-speech' is normal, just restart
-        if (event.error === 'no-speech' || event.error === 'aborted') return;
-        console.warn('Speech recognition error:', event.error);
-    };
-
-    recognition.onend = () => {
-        // Auto-restart if still recording
-        if (mediaRecorder && mediaRecorder.state === 'recording') {
-            try { recognition.start(); } catch (e) {}
-        }
-    };
-
-    recognition.start();
+    } catch (e) {
+        console.warn('Chunk transcription failed:', e);
+    } finally {
+        pendingChunk = false;
+    }
 }
 
 function updateLiveText() {
     const el = document.getElementById('live-text');
     if (!el) return;
-    el.innerHTML = finalTranscript + '<span class="interim">' + interimTranscript + '</span>';
+    el.textContent = fullTranscript;
     el.scrollTop = el.scrollHeight;
 }
 
 function stopRecording() {
-    if (recognition) {
-        recognition.onend = null; // prevent restart
-        recognition.abort();
-        recognition = null;
-    }
+    clearInterval(chunkInterval);
 
     if (mediaRecorder) {
         mediaRecorder.stop();
@@ -144,37 +131,41 @@ function stopRecording() {
         document.getElementById('record-status').textContent = '';
     }
 
-    const transcript = finalTranscript.trim();
-
-    if (transcript) {
-        // We have a live transcript — show it in editable form with options
-        document.getElementById('result').innerHTML = `
-            <div class="transcript-result">
-                <h2>Transcript</h2>
-                <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner">
-                    <textarea name="transcript" rows="12">${escapeHtml(transcript)}</textarea>
-                    <div class="transcript-actions">
-                        <button type="submit" class="btn">Analyze Structure</button>
-                        <button type="button" class="btn btn-secondary" onclick="reprocessWhisper()">Re-transcribe with Whisper</button>
-                    </div>
-                    <p class="hint">Edit the transcript if needed. Use "Re-transcribe with Whisper" for higher accuracy.</p>
-                </form>
-            </div>`;
-        htmx.process(document.getElementById('result'));
-    } else {
-        // No live transcript — send to Whisper
+    // Do one final transcription of the complete recording
+    if (recordedChunks.length > 0) {
         const blob = new Blob(recordedChunks, { type: 'audio/webm' });
         const form = new FormData();
         form.append('audio', blob, 'recording.webm');
-        submitAudio(form);
+
+        document.getElementById('result').innerHTML = `
+            <div class="live-transcript">
+                <h2>Transcript</h2>
+                <div id="live-text" class="live-text">${escapeHtml(fullTranscript)}<span class="interim"> finalizing...</span></div>
+            </div>`;
+
+        fetch('/argraphments/transcribe-raw', { method: 'POST', body: form })
+            .then(r => r.text())
+            .then(text => {
+                const final = text.trim() || fullTranscript;
+                showEditableTranscript(final);
+            })
+            .catch(() => showEditableTranscript(fullTranscript));
+    } else if (fullTranscript) {
+        showEditableTranscript(fullTranscript);
     }
 }
 
-function reprocessWhisper() {
-    const blob = new Blob(recordedChunks, { type: 'audio/webm' });
-    const form = new FormData();
-    form.append('audio', blob, 'recording.webm');
-    submitAudio(form);
+function showEditableTranscript(transcript) {
+    document.getElementById('result').innerHTML = `
+        <div class="transcript-result">
+            <h2>Transcript</h2>
+            <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner">
+                <textarea name="transcript" rows="12">${escapeHtml(transcript)}</textarea>
+                <p class="hint">Edit the transcript if needed, then analyze.</p>
+                <button type="submit" class="btn">Analyze Structure</button>
+            </form>
+        </div>`;
+    htmx.process(document.getElementById('result'));
 }
 
 function escapeHtml(text) {
