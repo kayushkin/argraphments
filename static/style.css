@@ -195,8 +195,42 @@ details > summary:hover { background: var(--surface); }
 .depth-3 { border-left-color: var(--question); }
 .depth-4 { border-left-color: var(--tangent); }
 
+/* Live transcript */
+.live-transcript h2 {
+    font-size: 1.2rem;
+    margin-bottom: 0.75rem;
+}
+.live-text {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    min-height: 120px;
+    max-height: 400px;
+    overflow-y: auto;
+    line-height: 1.8;
+    font-size: 0.95rem;
+}
+.live-text .interim {
+    color: var(--text-dim);
+    font-style: italic;
+}
+
 /* Transcript result */
 .transcript-result h2 {
     font-size: 1.2rem;
     margin-bottom: 1rem;
+}
+.transcript-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+.btn-secondary {
+    background: var(--surface2);
+    color: var(--text-dim);
+}
+.btn-secondary:hover {
+    background: var(--border);
+    color: var(--text);
 }
