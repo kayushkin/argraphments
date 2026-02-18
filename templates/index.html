@@ -31,6 +31,12 @@
 
             <div id="record-status"></div>
 
+            <!-- YouTube -->
+            <form class="youtube-row" hx-post="/argraphments/youtube" hx-target="#result" hx-indicator="#spinner">
+                <input type="text" name="url" placeholder="YouTube URL..." class="yt-input">
+                <button type="submit" class="btn">Fetch Transcript</button>
+            </form>
+
             <!-- Paste -->
             <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner">
                 <textarea name="transcript" rows="8" placeholder="Or paste a conversation transcript here..."></textarea>
