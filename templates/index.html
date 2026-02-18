@@ -16,13 +16,11 @@
 
         <div class="input-section">
             <div class="input-row">
-                <!-- Record -->
                 <button id="record-btn" class="btn btn-record" onclick="toggleRecording()">
                     <span class="record-dot"></span> Record
                 </button>
                 <span id="record-time" class="record-time">00:00</span>
 
-                <!-- Upload -->
                 <label class="btn btn-upload">
                     <input type="file" name="audio" accept="audio/*,video/*" onchange="uploadFile(this)" hidden>
                     Upload Audio
@@ -31,13 +29,6 @@
 
             <div id="record-status"></div>
 
-            <!-- YouTube -->
-            <form class="youtube-row" hx-post="/argraphments/youtube" hx-target="#result" hx-indicator="#spinner">
-                <input type="text" name="url" placeholder="YouTube URL..." class="yt-input">
-                <button type="submit" class="btn">Fetch Transcript</button>
-            </form>
-
-            <!-- Paste -->
             <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner">
                 <textarea name="transcript" rows="8" placeholder="Or paste a conversation transcript here..."></textarea>
                 <button type="submit" class="btn">Analyze</button>

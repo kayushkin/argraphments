@@ -10,7 +10,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -32,7 +31,11 @@ func main() {
 		log.Fatal("OPENAI_API_KEY required")
 	}
 
-	templates = template.Must(template.ParseGlob("templates/*.html"))
+	var err error
+	templates, err = loadTemplates()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	os.MkdirAll("uploads", 0755)
 
@@ -42,13 +45,16 @@ func main() {
 	mux.HandleFunc(prefix+"/", handleIndex)
 	mux.HandleFunc(prefix+"/transcribe", handleTranscribe)
 	mux.HandleFunc(prefix+"/analyze", handleAnalyze)
-	mux.HandleFunc(prefix+"/youtube", handleYouTube)
 	mux.Handle(prefix+"/static/", http.StripPrefix(prefix+"/static/", http.FileServer(http.Dir("static"))))
 
 	port := getEnv("PORT", "8086")
 	addr := "127.0.0.1:" + port
 	log.Printf("argraphments listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+func loadTemplates() (*template.Template, error) {
+	return template.ParseGlob("templates/*.html")
 }
 
 func getEnv(key, fallback string) string {
@@ -128,145 +134,6 @@ func handleAnalyze(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(w, renderStructure(structure))
-}
-
-// handleYouTube fetches transcript from a YouTube video
-func handleYouTube(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	url := strings.TrimSpace(r.FormValue("url"))
-	if url == "" {
-		htmxError(w, "No URL provided")
-		return
-	}
-
-	// Try fetching existing subtitles first
-	transcript, err := ytSubtitles(url)
-	if err != nil {
-		// Fall back: download audio and transcribe via Whisper
-		transcript, err = ytAudioTranscribe(url)
-		if err != nil {
-			htmxError(w, fmt.Sprintf("YouTube failed: %v", err))
-			return
-		}
-	}
-
-	w.Header().Set("Content-Type", "text/html")
-	templates.ExecuteTemplate(w, "transcript.html", map[string]string{
-		"Transcript": transcript,
-	})
-}
-
-// ytSubtitles tries to get existing captions via yt-dlp
-func ytSubtitles(url string) (string, error) {
-	tmpDir := fmt.Sprintf("uploads/yt-%d", time.Now().UnixNano())
-	os.MkdirAll(tmpDir, 0755)
-	defer os.RemoveAll(tmpDir)
-
-	outPath := filepath.Join(tmpDir, "subs")
-
-	cmd := exec.Command("yt-dlp",
-		"--write-subs", "--write-auto-subs",
-		"--sub-lang", "en",
-		"--sub-format", "vtt",
-		"--skip-download",
-		"-o", outPath,
-		url,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("yt-dlp subs: %v: %s", err, string(out))
-	}
-
-	// Find the subtitle file
-	matches, _ := filepath.Glob(tmpDir + "/*.vtt")
-	if len(matches) == 0 {
-		return "", fmt.Errorf("no subtitles found")
-	}
-
-	raw, err := os.ReadFile(matches[0])
-	if err != nil {
-		return "", err
-	}
-
-	return cleanVTT(string(raw)), nil
-}
-
-// ytAudioTranscribe downloads audio and sends to Whisper
-func ytAudioTranscribe(url string) (string, error) {
-	tmpDir := fmt.Sprintf("uploads/yt-%d", time.Now().UnixNano())
-	os.MkdirAll(tmpDir, 0755)
-	defer os.RemoveAll(tmpDir)
-
-	outPath := filepath.Join(tmpDir, "audio.mp3")
-
-	cmd := exec.Command("yt-dlp",
-		"-x", "--audio-format", "mp3",
-		"--audio-quality", "5",
-		"-o", outPath,
-		url,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("yt-dlp audio: %v: %s", err, string(out))
-	}
-
-	// yt-dlp might add extension
-	if _, err := os.Stat(outPath); os.IsNotExist(err) {
-		matches, _ := filepath.Glob(tmpDir + "/audio.*")
-		if len(matches) == 0 {
-			return "", fmt.Errorf("no audio file produced")
-		}
-		outPath = matches[0]
-	}
-
-	return whisperTranscribe(outPath)
-}
-
-// cleanVTT strips VTT timestamps and deduplicates lines
-func cleanVTT(raw string) string {
-	lines := strings.Split(raw, "\n")
-	var result []string
-	seen := ""
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		// Skip headers, timestamps, empty lines
-		if line == "" || line == "WEBVTT" || strings.Contains(line, "-->") || strings.HasPrefix(line, "Kind:") || strings.HasPrefix(line, "Language:") || strings.HasPrefix(line, "NOTE") {
-			continue
-		}
-		// Strip VTT tags like <c> </c> <00:00:01.234>
-		clean := stripVTTTags(line)
-		clean = strings.TrimSpace(clean)
-		if clean == "" || clean == seen {
-			continue
-		}
-		seen = clean
-		result = append(result, clean)
-	}
-	return strings.Join(result, " ")
-}
-
-func stripVTTTags(s string) string {
-	// Remove <...> tags
-	var result strings.Builder
-	inTag := false
-	for _, r := range s {
-		if r == '<' {
-			inTag = true
-			continue
-		}
-		if r == '>' {
-			inTag = false
-			continue
-		}
-		if !inTag {
-			result.WriteRune(r)
-		}
-	}
-	return result.String()
 }
 
 func htmxError(w http.ResponseWriter, msg string) {
