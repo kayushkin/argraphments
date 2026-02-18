@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>argraphments</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>argraphments</h1>
+            <p class="subtitle">conversations, structured</p>
+        </header>
+
+        <div class="input-section">
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('upload', this)">Upload Audio</button>
+                <button class="tab" onclick="switchTab('record', this)">Record Live</button>
+                <button class="tab" onclick="switchTab('paste', this)">Paste Text</button>
+            </div>
+
+            <!-- Upload -->
+            <form id="tab-upload" class="tab-content active"
+                  hx-post="/transcribe"
+                  hx-target="#result"
+                  hx-encoding="multipart/form-data"
+                  hx-indicator="#spinner">
+                <label class="file-drop" id="drop-zone">
+                    <input type="file" name="audio" accept="audio/*,video/*" onchange="updateFileName(this)">
+                    <span id="file-label">Drop audio file here or click to browse</span>
+                </label>
+                <button type="submit" class="btn">Transcribe</button>
+            </form>
+
+            <!-- Record -->
+            <div id="tab-record" class="tab-content">
+                <div class="record-controls">
+                    <button id="record-btn" class="btn btn-record" onclick="toggleRecording()">
+                        <span class="record-dot"></span> Record
+                    </button>
+                    <span id="record-time" class="record-time">00:00</span>
+                </div>
+                <div id="record-status"></div>
+            </div>
+
+            <!-- Paste -->
+            <div id="tab-paste" class="tab-content">
+                <form hx-post="/analyze" hx-target="#result" hx-indicator="#spinner">
+                    <textarea name="transcript" rows="10" placeholder="Paste a conversation transcript here..."></textarea>
+                    <button type="submit" class="btn">Analyze</button>
+                </form>
+            </div>
+        </div>
+
+        <div id="spinner" class="htmx-indicator">
+            <div class="spinner"></div>
+            <span>Processing...</span>
+        </div>
+
+        <div id="result"></div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
