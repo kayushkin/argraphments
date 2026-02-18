@@ -389,10 +389,16 @@ func diarizeTranscript(transcript string) (*DiarizeResult, error) {
 
 Rules:
 - Identify speaker changes from context: opinion shifts, turn-taking, Q&A patterns, different perspectives
-- If speakers mention their names or are addressed by name, capture those names
 - If it's a monologue, use a single speaker
 - Keep the original wording, don't paraphrase
 - Split at natural speaker boundaries
+
+NAME DETECTION (important):
+- When someone says a name, they are almost always addressing the OTHER person, not themselves
+- "Hey John, what do you think?" → the LISTENER is John, not the speaker
+- "Thanks Sarah" → Sarah is the person being thanked, not the one speaking
+- "I'm Mike" or "My name is Mike" → rare case where they ARE naming themselves
+- Apply this logic carefully to assign detected names to the correct speaker
 
 Return JSON with this exact structure:
 {
@@ -406,7 +412,7 @@ Return JSON with this exact structure:
   ]
 }
 
-Use speaker IDs like "speaker_1", "speaker_2", etc. If you detect a real name from the conversation (e.g. someone says "Thanks John" or "I'm Sarah"), put that name in the speakers map. Otherwise leave it as an empty string.
+Use speaker IDs like "speaker_1", "speaker_2", etc. Put detected names in the speakers map for the correct person (the one being addressed, not the one speaking). Leave as empty string if no name detected.
 
 Return ONLY valid JSON, no markdown fences.
 
