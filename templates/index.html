@@ -16,8 +16,11 @@
 
         <div class="input-section">
             <div class="input-row">
-                <button id="record-btn" class="btn btn-record" onclick="toggleRecording()">
-                    <span class="record-dot"></span> Record
+                <button id="record-btn" class="btn btn-record" onclick="toggleRecording('mic')">
+                    <span class="record-dot"></span> Mic
+                </button>
+                <button id="tab-record-btn" class="btn btn-record" onclick="toggleRecording('tab')">
+                    <span class="record-dot"></span> Tab Audio
                 </button>
                 <span id="record-time" class="record-time">00:00</span>
 

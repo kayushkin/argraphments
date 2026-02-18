@@ -12,18 +12,37 @@ let mediaRecorder = null;
 let recordedChunks = [];
 let recordStart = null;
 let recordTimer = null;
+let activeMode = null; // 'mic' or 'tab'
 
-function toggleRecording() {
+function toggleRecording(mode) {
     if (mediaRecorder && mediaRecorder.state === 'recording') {
         stopRecording();
     } else {
-        startRecording();
+        startRecording(mode);
     }
 }
 
-async function startRecording() {
+async function startRecording(mode) {
+    activeMode = mode;
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        let stream;
+        if (mode === 'tab') {
+            // Capture tab/screen audio directly (high quality, no mic noise)
+            stream = await navigator.mediaDevices.getDisplayMedia({
+                video: true,  // required by API but we discard it
+                audio: true,
+            });
+            // Drop the video track — we only want audio
+            stream.getVideoTracks().forEach(t => t.stop());
+            // Check we actually got audio
+            if (stream.getAudioTracks().length === 0) {
+                document.getElementById('record-status').textContent = 'No audio track — make sure you select "Share tab audio"';
+                return;
+            }
+        } else {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        }
+
         recordedChunks = [];
         mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
 
@@ -43,12 +62,13 @@ async function startRecording() {
         recordStart = Date.now();
         updateRecordTime();
 
-        const btn = document.getElementById('record-btn');
+        const btn = document.getElementById(mode === 'tab' ? 'tab-record-btn' : 'record-btn');
         btn.classList.add('recording');
         btn.childNodes[btn.childNodes.length - 1].textContent = ' Stop';
-        document.getElementById('record-status').textContent = 'Recording...';
+        document.getElementById('record-status').textContent = mode === 'tab' ? 'Capturing tab audio...' : 'Recording...';
     } catch (err) {
-        document.getElementById('record-status').textContent = 'Mic access denied: ' + err.message;
+        document.getElementById('record-status').textContent =
+            mode === 'tab' ? 'Tab capture failed: ' + err.message : 'Mic access denied: ' + err.message;
     }
 }
 
@@ -56,9 +76,9 @@ function stopRecording() {
     if (mediaRecorder) {
         mediaRecorder.stop();
         clearInterval(recordTimer);
-        const btn = document.getElementById('record-btn');
+        const btn = document.getElementById(activeMode === 'tab' ? 'tab-record-btn' : 'record-btn');
         btn.classList.remove('recording');
-        btn.childNodes[btn.childNodes.length - 1].textContent = ' Record';
+        btn.childNodes[btn.childNodes.length - 1].textContent = activeMode === 'tab' ? ' Tab Audio' : ' Mic';
         document.getElementById('record-status').textContent = 'Processing...';
     }
 }
