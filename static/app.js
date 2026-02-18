@@ -87,7 +87,7 @@ function uploadRecording(blob) {
     });
 
     // Manual approach since htmx.ajax with FormData can be tricky
-    fetch('/transcribe', { method: 'POST', body: form })
+    fetch('/argraphments/transcribe', { method: 'POST', body: form })
         .then(r => r.text())
         .then(html => {
             document.getElementById('result').innerHTML = html;

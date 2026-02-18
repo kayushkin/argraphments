@@ -35,13 +35,15 @@ func main() {
 
 	os.MkdirAll("uploads", 0755)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleIndex)
-	mux.HandleFunc("/transcribe", handleTranscribe)
-	mux.HandleFunc("/analyze", handleAnalyze)
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	prefix := getEnv("BASE_PATH", "/argraphments")
 
-	port := getEnv("PORT", "8081")
+	mux := http.NewServeMux()
+	mux.HandleFunc(prefix+"/", handleIndex)
+	mux.HandleFunc(prefix+"/transcribe", handleTranscribe)
+	mux.HandleFunc(prefix+"/analyze", handleAnalyze)
+	mux.Handle(prefix+"/static/", http.StripPrefix(prefix+"/static/", http.FileServer(http.Dir("static"))))
+
+	port := getEnv("PORT", "8086")
 	addr := "127.0.0.1:" + port
 	log.Printf("argraphments listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))

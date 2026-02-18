@@ -6,7 +6,7 @@ After=network.target
 ExecStart=/usr/local/bin/argraphments-server
 WorkingDirectory=/home/kayushkincom/argraphments
 User=kayushkincom
-Environment=PORT=8081
+Environment=PORT=8086
 EnvironmentFile=/home/kayushkincom/argraphments/.env
 Restart=always
 RestartSec=3

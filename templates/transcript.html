@@ -1,6 +1,6 @@
 <div class="transcript-result">
     <h2>Transcript</h2>
-    <form hx-post="/analyze" hx-target="#result" hx-indicator="#spinner">
+    <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner">
         <textarea name="transcript" rows="12">{{.Transcript}}</textarea>
         <p class="hint">Edit the transcript if needed, then analyze.</p>
         <button type="submit" class="btn">Analyze Structure</button>
