@@ -237,8 +237,17 @@ type Statement struct {
 func extractStructure(transcript string) ([]Statement, error) {
 	prompt := `Analyze this conversation transcript and extract a nested argument/discussion structure.
 
+IMPORTANT — Speaker identification:
+The transcript may not have speaker labels. You MUST identify distinct speakers from context clues:
+- Changes in position/opinion (one person argues for X, another against)
+- Turn-taking patterns, conversational flow
+- Different speaking styles, vocabulary, or perspectives
+- Phrases like "I disagree", "but", "well actually" often signal a speaker change
+- Questions followed by answers typically involve different speakers
+Label them as "Speaker 1", "Speaker 2", etc. Be consistent — the same person should always get the same label. If it's clearly a monologue, use a single speaker.
+
 Return a JSON array of top-level statements. Each statement has:
-- "speaker": who said it (use "Speaker 1", "Speaker 2" etc if unknown)
+- "speaker": who said it (use "Speaker 1", "Speaker 2" etc)
 - "text": the core claim or statement (paraphrased concisely)
 - "type": one of "claim", "response", "question", "agreement", "rebuttal", "tangent", "clarification", "evidence"
 - "children": array of statements that are direct responses/follow-ups to this one
