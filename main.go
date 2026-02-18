@@ -46,6 +46,7 @@ func main() {
 	mux.HandleFunc(prefix+"/transcribe", handleTranscribe)
 	mux.HandleFunc(prefix+"/analyze", handleAnalyze)
 	mux.HandleFunc(prefix+"/transcribe-raw", handleTranscribeRaw)
+	mux.HandleFunc(prefix+"/diarize", handleDiarize)
 	mux.Handle(prefix+"/static/", http.StripPrefix(prefix+"/static/", http.FileServer(http.Dir("static"))))
 
 	port := getEnv("PORT", "8086")
@@ -175,6 +176,122 @@ func handleTranscribeRaw(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprint(w, transcript)
+}
+
+// handleDiarize takes raw transcript, returns speaker-labeled JSON
+func handleDiarize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	transcript := strings.TrimSpace(r.FormValue("transcript"))
+	if transcript == "" {
+		http.Error(w, "no transcript", 400)
+		return
+	}
+
+	result, err := diarizeTranscript(transcript)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+type DiarizeResult struct {
+	Speakers map[string]string `json:"speakers"` // id -> detected name
+	Messages []DiarizeMessage  `json:"messages"`
+}
+
+type DiarizeMessage struct {
+	Speaker string `json:"speaker"` // speaker id
+	Text    string `json:"text"`
+}
+
+func diarizeTranscript(transcript string) (*DiarizeResult, error) {
+	prompt := `You are a conversation diarization system. Given a raw transcript (which may have no speaker labels), identify distinct speakers and split the text into a conversation.
+
+Rules:
+- Identify speaker changes from context: opinion shifts, turn-taking, Q&A patterns, different perspectives
+- If speakers mention their names or are addressed by name, capture those names
+- If it's a monologue, use a single speaker
+- Keep the original wording, don't paraphrase
+- Split at natural speaker boundaries
+
+Return JSON with this exact structure:
+{
+  "speakers": {
+    "speaker_1": "detected name or empty string",
+    "speaker_2": "detected name or empty string"
+  },
+  "messages": [
+    {"speaker": "speaker_1", "text": "what they said"},
+    {"speaker": "speaker_2", "text": "what they said"}
+  ]
+}
+
+Use speaker IDs like "speaker_1", "speaker_2", etc. If you detect a real name from the conversation (e.g. someone says "Thanks John" or "I'm Sarah"), put that name in the speakers map. Otherwise leave it as an empty string.
+
+Return ONLY valid JSON, no markdown fences.
+
+Transcript:
+` + transcript
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"model":      "claude-sonnet-4-20250514",
+		"max_tokens": 4096,
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+	})
+
+	req, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-api-key", anthropicKey)
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("claude API %d: %s", resp.StatusCode, string(body))
+	}
+
+	var apiResult struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(body, &apiResult); err != nil {
+		return nil, err
+	}
+	if len(apiResult.Content) == 0 {
+		return nil, fmt.Errorf("empty response")
+	}
+
+	text := strings.TrimSpace(apiResult.Content[0].Text)
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+
+	var result DiarizeResult
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		return nil, fmt.Errorf("parse error: %v\nraw: %s", err, text)
+	}
+	return &result, nil
 }
 
 func htmxError(w http.ResponseWriter, msg string) {

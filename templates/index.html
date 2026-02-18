@@ -32,7 +32,7 @@
 
             <div id="record-status"></div>
 
-            <form hx-post="/argraphments/analyze" hx-target="#result" hx-indicator="#spinner">
+            <form onsubmit="event.preventDefault(); submitPasteForDiarize(this);">
                 <textarea name="transcript" rows="8" placeholder="Or paste a conversation transcript here..."></textarea>
                 <button type="submit" class="btn">Analyze</button>
             </form>
