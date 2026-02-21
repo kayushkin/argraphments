@@ -4,14 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>argraphments</title>
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-    <link rel="stylesheet" href="/argraphments/static/style.css">
+    <link rel="stylesheet" href="{{.BasePath}}/static/style.css">
 </head>
 <body>
     <div class="container">
         <header id="header">
-            <h1>argraphments</h1>
-            <p class="subtitle">conversations, structured</p>
+            <a href="{{.BasePath}}/" onclick="event.preventDefault(); showInputs()" class="header-brand">argraphments</a>
+            <nav class="header-nav">
+                <a href="{{.BasePath}}/speakers" onclick="event.preventDefault(); loadSpeakersPage()">speakers</a>
+                <a href="{{.BasePath}}/conversations" onclick="event.preventDefault(); loadConversationsPage()">conversations</a>
+            </nav>
+            <a href="https://kayushkin.com" class="attribution">kayushkin.com</a>
         </header>
 
         <div class="input-section" id="input-section">
@@ -32,17 +35,37 @@
 
             <div id="record-status"></div>
 
+            <div class="youtube-import">
+                <form onsubmit="event.preventDefault(); importYouTube(this.url.value)">
+                    <div class="input-row">
+                        <input type="text" name="url" placeholder="YouTube URL" class="yt-url-input">
+                        <button type="submit" class="btn">Import</button>
+                    </div>
+                </form>
+                <div id="yt-status"></div>
+            </div>
+
             <form onsubmit="event.preventDefault(); submitPasteForDiarize(this);">
                 <textarea name="transcript" rows="8" placeholder="Or paste a conversation transcript here..."></textarea>
-                <button type="submit" class="btn">Analyze</button>
+                <div class="input-row" style="margin-top:0.5rem">
+                    <button type="submit" class="btn">Analyze</button>
+                    <button type="button" class="btn btn-secondary" onclick="submitTestConvo()">Try a sample</button>
+                </div>
             </form>
+
+            <div class="discovery" id="discovery" style="display:none">
+                <div class="discovery-col" id="discovery-speakers">
+                    <h3>Speakers</h3>
+                    <div class="speakers-list" id="speakers-list"></div>
+                </div>
+                <div class="discovery-col" id="discovery-conversations">
+                    <h3>Conversations</h3>
+                    <div class="conversations-list" id="conversations-list"></div>
+                </div>
+            </div>
         </div>
 
-        <div class="recording-bar" id="recording-bar" style="display:none">
-            <span class="record-dot recording"></span>
-            <span id="recording-bar-time" class="record-time">00:00</span>
-            <button class="btn btn-stop" onclick="stopRecording()">Stop</button>
-        </div>
+        {{template "header.html"}}
 
         <div id="spinner" class="htmx-indicator">
             <div class="spinner"></div>
@@ -50,8 +73,33 @@
         </div>
 
         <div id="result"></div>
+
+        <template id="tmpl-live-session">
+            <div class="live-session">
+                <div class="diarized-view" id="diarized-view">
+                    <div class="section-header">
+                        <span class="section-label">Transcript</span>
+                        <button class="btn-minimize" onclick="toggleSection('diarized-view')" title="Minimize">−</button>
+                    </div>
+                    <div class="section-body" id="diarized-view-body">
+                        <div class="chat-messages" id="chat-messages">
+                            <div class="chat-msg"><span class="chat-text interim" id="session-status">Listening...</span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="argument-section" id="argument-section" style="display:none">
+                    <div class="section-header">
+                        <span class="section-label">Argument Tree</span>
+                        <button class="btn-minimize" onclick="toggleSection('argument-section')" title="Minimize">−</button>
+                    </div>
+                    <div class="section-body" id="argument-section-body">
+                        <div id="argument-tree"></div>
+                    </div>
+                </div>
+            </div>
+        </template>
     </div>
 
-    <script src="/argraphments/static/app.js"></script>
+    <script src="{{.BasePath}}/static/app.js"></script>
 </body>
 </html>

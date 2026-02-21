@@ -12,14 +12,18 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kayushkin/argraphments/storage"
 )
 
 var (
 	anthropicKey string
 	openaiKey    string
 	templates    *template.Template
+	store        *storage.Store
 )
 
 func main() {
@@ -40,16 +44,37 @@ func main() {
 
 	os.MkdirAll("uploads", 0755)
 
-	prefix := getEnv("BASE_PATH", "/argraphments")
+	dbPath := getEnv("ARGRAPHMENTS_DB", "./argraphments.db")
+	store, err = storage.NewStore(dbPath)
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
+	defer store.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(prefix+"/", handleIndex)
-	mux.HandleFunc(prefix+"/transcribe", handleTranscribe)
-	mux.HandleFunc(prefix+"/analyze", handleAnalyze)
-	mux.HandleFunc(prefix+"/transcribe-raw", handleTranscribeRaw)
-	mux.HandleFunc(prefix+"/diarize", handleDiarize)
-	mux.HandleFunc(prefix+"/analyze-raw", handleAnalyzeRaw)
-	mux.Handle(prefix+"/static/", http.StripPrefix(prefix+"/static/", http.FileServer(http.Dir("static"))))
+	staticFS := http.FileServer(http.Dir("static"))
+	distAssetsFS := http.FileServer(http.Dir("static/dist"))
+
+	// Register routes on both /argraphments and / prefixes
+	for _, prefix := range []string{"/argraphments", ""} {
+		p := prefix
+		mux.HandleFunc(p+"/", handleIndex)
+		mux.Handle(p+"/static/", http.StripPrefix(p+"/static/", staticFS))
+		mux.Handle(p+"/assets/", http.StripPrefix(p, distAssetsFS))
+		mux.HandleFunc(p+"/api/transcribe", handleAPITranscribe)
+		mux.HandleFunc(p+"/api/diarize", handleAPIDiarize)
+		mux.HandleFunc(p+"/api/analyze", handleAPIAnalyze)
+		mux.HandleFunc(p+"/api/analyze-incremental", handleAPIAnalyzeIncremental)
+		mux.HandleFunc(p+"/api/session/new", handleAPINewSession)
+		mux.HandleFunc(p+"/api/transcripts", handleAPITranscripts)
+		mux.HandleFunc(p+"/api/transcripts/", handleAPITranscripts)
+		mux.HandleFunc(p+"/api/claims/", handleAPIClaim)
+		mux.HandleFunc(p+"/api/speakers", handleAPISpeakers)
+		mux.HandleFunc(p+"/api/speakers/", handleAPISpeakers)
+		mux.HandleFunc(p+"/api/import/youtube", handleAPIImportYouTube)
+		mux.HandleFunc(p+"/api/graph", handleAPIGraph)
+		mux.HandleFunc(p+"/api/sample", handleAPISample)
+	}
 
 	port := getEnv("PORT", "8086")
 	addr := "127.0.0.1:" + port
@@ -69,81 +94,51 @@ func getEnv(key, fallback string) string {
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
-	templates.ExecuteTemplate(w, "index.html", nil)
+	// Serve React SPA, rewriting asset paths for /argraphments prefix
+	data, err := os.ReadFile("static/dist/index.html")
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	html := string(data)
+	// If served under /argraphments, rewrite asset paths
+	if strings.HasPrefix(r.URL.Path, "/argraphments") {
+		html = strings.ReplaceAll(html, `src="/assets/`, `src="/argraphments/assets/`)
+		html = strings.ReplaceAll(html, `href="/assets/`, `href="/argraphments/assets/`)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(html))
 }
 
-// handleTranscribe receives audio, sends to Whisper, returns transcript HTML
-func handleTranscribe(w http.ResponseWriter, r *http.Request) {
+// --- JSON API handlers ---
+
+// POST /api/session/new — creates a placeholder transcript, returns slug
+func handleAPINewSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	r.ParseMultipartForm(50 << 20) // 50MB max
-
-	file, header, err := r.FormFile("audio")
+	id, err := store.SaveTranscript("", "")
 	if err != nil {
-		htmxError(w, "No audio file provided")
+		jsonError(w, "failed to create session", 500)
 		return
 	}
-	defer file.Close()
-
-	// Save temporarily
-	ext := filepath.Ext(header.Filename)
-	if ext == "" {
-		ext = ".webm"
-	}
-	tmpPath := fmt.Sprintf("uploads/%d%s", time.Now().UnixNano(), ext)
-	dst, err := os.Create(tmpPath)
+	t, err := store.GetTranscript(id)
 	if err != nil {
-		htmxError(w, "Failed to save upload")
+		jsonError(w, "failed to get session", 500)
 		return
 	}
-	io.Copy(dst, file)
-	dst.Close()
-	defer os.Remove(tmpPath)
-
-	// Transcribe via Whisper
-	transcript, err := whisperTranscribe(tmpPath)
-	if err != nil {
-		htmxError(w, fmt.Sprintf("Transcription failed: %v", err))
-		return
-	}
-
-	// Return transcript in editable form + analyze button
-	w.Header().Set("Content-Type", "text/html")
-	templates.ExecuteTemplate(w, "transcript.html", map[string]string{
-		"Transcript": transcript,
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"slug": t.Slug,
+		"id":   t.ID,
 	})
 }
 
-// handleAnalyze takes transcript text, extracts argument structure via Claude
-func handleAnalyze(w http.ResponseWriter, r *http.Request) {
+// POST /api/transcribe — accepts audio file, returns {"text": "..."}
+func handleAPITranscribe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	transcript := r.FormValue("transcript")
-	if strings.TrimSpace(transcript) == "" {
-		htmxError(w, "No transcript provided")
-		return
-	}
-
-	structure, err := extractStructure(transcript)
-	if err != nil {
-		htmxError(w, fmt.Sprintf("Analysis failed: %v", err))
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, renderStructure(structure))
-}
-
-// handleTranscribeRaw returns plain text transcript (for live chunked transcription)
-func handleTranscribeRaw(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -151,7 +146,7 @@ func handleTranscribeRaw(w http.ResponseWriter, r *http.Request) {
 
 	file, header, err := r.FormFile("audio")
 	if err != nil {
-		http.Error(w, "no audio file", 400)
+		jsonError(w, "no audio file", 400)
 		return
 	}
 	defer file.Close()
@@ -163,100 +158,685 @@ func handleTranscribeRaw(w http.ResponseWriter, r *http.Request) {
 	tmpPath := fmt.Sprintf("uploads/%d%s", time.Now().UnixNano(), ext)
 	dst, err := os.Create(tmpPath)
 	if err != nil {
-		http.Error(w, "failed to save", 500)
+		jsonError(w, "failed to save", 500)
 		return
 	}
-	io.Copy(dst, file)
+	n, _ := io.Copy(dst, file)
 	dst.Close()
 	defer os.Remove(tmpPath)
 
+	if n == 0 {
+		jsonError(w, "empty audio file", 400)
+		return
+	}
+
+	log.Printf("Transcribe: saved %d bytes to %s", n, tmpPath)
+
 	transcript, err := whisperTranscribe(tmpPath)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		jsonError(w, fmt.Sprintf("transcription failed: %v", err), 500)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(w, transcript)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"text": transcript})
 }
 
-// handleAnalyzeRaw returns incremental argument analysis as JSON
-// Accepts "new_text" (new portion) and "existing" (JSON of current structure) for incremental mode
-// Or just "transcript" for full analysis
-func handleAnalyzeRaw(w http.ResponseWriter, r *http.Request) {
+// POST /api/diarize — accepts {"transcript": "..."}, returns diarize result
+func handleAPIDiarize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
 
-	newText := strings.TrimSpace(r.FormValue("new_text"))
-	existingJSON := strings.TrimSpace(r.FormValue("existing"))
-	fullTranscript := strings.TrimSpace(r.FormValue("transcript"))
-
-	if newText != "" {
-		// Incremental mode
-		var existing []Statement
-		if existingJSON != "" {
-			json.Unmarshal([]byte(existingJSON), &existing)
+	// Accept both JSON body and form data
+	var transcript string
+	var segments []TimedSegment
+	ct := r.Header.Get("Content-Type")
+	if strings.Contains(ct, "application/json") {
+		var req struct {
+			Transcript string         `json:"transcript"`
+			Segments   []TimedSegment `json:"segments,omitempty"`
 		}
-
-		newStatements, err := extractIncremental(newText, existing)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, "invalid JSON", 400)
 			return
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"mode":       "incremental",
-			"statements": newStatements,
-		})
-	} else if fullTranscript != "" {
-		// Full analysis mode
-		structure, err := extractStructure(fullTranscript)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"mode":       "full",
-			"statements": structure,
-		})
+		transcript = req.Transcript
+		segments = req.Segments
 	} else {
-		http.Error(w, "no transcript", 400)
+		r.ParseMultipartForm(10 << 20)
+		transcript = strings.TrimSpace(r.FormValue("transcript"))
 	}
+
+	if strings.TrimSpace(transcript) == "" {
+		jsonError(w, "no transcript", 400)
+		return
+	}
+
+	result, err := diarizeTranscript(transcript)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Assign timestamps from segments if available
+	if len(segments) > 0 && len(result.Messages) > 0 {
+		assignTimestamps(result.Messages, segments)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
-func extractIncremental(newText string, existing []Statement) ([]Statement, error) {
-	// Build a summary of existing structure for context
-	existingSummary := summarizeStatements(existing, 0)
+// POST /api/analyze — full analysis, returns {"statements": [...], "transcript_id": N}
+func handleAPIAnalyze(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
 
-	prompt := `You are analyzing a LIVE conversation incrementally. You've already analyzed earlier parts of the conversation.
+	var req struct {
+		Transcript     string                    `json:"transcript"`
+		Slug           string                    `json:"slug,omitempty"`
+		Speakers       map[string]string         `json:"speakers,omitempty"`
+		Messages       []storage.DiarizeMessage  `json:"messages,omitempty"`
+		SpeakerAutoGen map[string]bool           `json:"speaker_auto_gen,omitempty"`
+		SourceURL      string                    `json:"source_url,omitempty"`
+	}
 
-EXISTING ANALYSIS (for context only — do NOT repeat these):
-` + existingSummary + `
+	ct := r.Header.Get("Content-Type")
+	if strings.Contains(ct, "application/json") {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, "invalid JSON", 400)
+			return
+		}
+	} else {
+		r.ParseMultipartForm(10 << 20)
+		req.Transcript = strings.TrimSpace(r.FormValue("transcript"))
+		// Parse optional speakers/messages from form
+		if s := r.FormValue("speakers"); s != "" {
+			json.Unmarshal([]byte(s), &req.Speakers)
+		}
+		if m := r.FormValue("messages"); m != "" {
+			json.Unmarshal([]byte(m), &req.Messages)
+		}
+	}
 
-NEW PORTION OF CONVERSATION to analyze:
-` + newText + `
+	if strings.TrimSpace(req.Transcript) == "" {
+		jsonError(w, "no transcript", 400)
+		return
+	}
 
-Return ONLY new statements from the new portion. Each statement has:
-- "speaker": who said it (use same speaker labels as existing analysis)
+	analysis, err := extractStructure(req.Transcript)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("analysis failed: %v", err), 500)
+		return
+	}
+
+	var existingID int64
+	if req.Slug != "" {
+		if t, err := store.GetTranscriptBySlug(req.Slug); err == nil {
+			existingID = t.ID
+		}
+	}
+	tid := persistStatements("", analysis.Statements, req.Speakers, req.Messages, req.SpeakerAutoGen, existingID)
+
+	// Update title if Claude generated one
+	if analysis.Title != "" && tid > 0 {
+		store.UpdateTitle(tid, analysis.Title)
+	}
+	// Save source URL if provided
+	if req.SourceURL != "" && tid > 0 {
+		store.SetSourceURL(tid, req.SourceURL)
+	}
+
+	// Get slug for response
+	slug := req.Slug
+	if slug == "" && tid > 0 {
+		if t, err := store.GetTranscript(tid); err == nil {
+			slug = t.Slug
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"statements":    analysis.Statements,
+		"transcript_id": tid,
+		"slug":          slug,
+		"title":         analysis.Title,
+	})
+}
+
+// POST /api/analyze-incremental — incremental analysis
+func handleAPIAnalyzeIncremental(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		NewText     string      `json:"new_text"`
+		ContextText string      `json:"context_text"`
+		Existing    []Statement `json:"existing"`
+		MsgOffset   int         `json:"msg_offset"`
+		FullReview  bool        `json:"full_review"`
+	}
+
+	ct := r.Header.Get("Content-Type")
+	if strings.Contains(ct, "application/json") {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, "invalid JSON", 400)
+			return
+		}
+	} else {
+		r.ParseMultipartForm(10 << 20)
+		req.NewText = strings.TrimSpace(r.FormValue("new_text"))
+		if e := r.FormValue("existing"); e != "" {
+			json.Unmarshal([]byte(e), &req.Existing)
+		}
+	}
+
+	if strings.TrimSpace(req.NewText) == "" {
+		jsonError(w, "no new_text", 400)
+		return
+	}
+
+	result, err := extractIncremental(req.NewText, req.ContextText, req.Existing, req.MsgOffset, req.FullReview)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// GET /api/transcripts and GET /api/transcripts/{id}
+func handleAPITranscripts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	path := r.URL.Path
+	path = strings.TrimPrefix(path, "/argraphments")
+	path = strings.TrimPrefix(path, "/api/transcripts")
+	path = strings.TrimPrefix(path, "/")
+
+	if path != "" {
+		// Check for sub-resource: {slug}/speakers
+		slug := path
+		subResource := ""
+		if idx := strings.Index(path, "/"); idx != -1 {
+			slug = path[:idx]
+			subResource = path[idx+1:]
+		}
+
+		// Try numeric ID first, then slug
+		var t *storage.Transcript
+		var err error
+		id, parseErr := strconv.ParseInt(slug, 10, 64)
+		if parseErr == nil {
+			t, err = store.GetTranscript(id)
+		} else {
+			t, err = store.GetTranscriptBySlug(slug)
+		}
+		if err != nil {
+			http.Error(w, `{"error":"not found"}`, 404)
+			return
+		}
+
+		// Handle PUT /api/transcripts/{slug}/speakers
+		if subResource == "speakers" && r.Method == http.MethodPut {
+			var req struct {
+				Speakers       map[string]string `json:"speakers"`
+				SpeakerAutoGen map[string]bool   `json:"speaker_auto_gen,omitempty"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Speakers == nil {
+				jsonError(w, "invalid request", 400)
+				return
+			}
+			// Update speakers in utterances
+			_, messages, _ := store.GetDiarization(t.ID)
+			if messages == nil {
+				messages = []storage.DiarizeMessage{}
+			}
+			store.SaveDiarization(t.ID, req.Speakers, messages)
+			if req.SpeakerAutoGen != nil {
+				store.SaveSpeakersWithFlags(t.ID, req.Speakers, req.SpeakerAutoGen)
+			}
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
+		}
+
+		// Get diarization data
+		speakers, messages, _ := store.GetDiarization(t.ID)
+
+		// Build speaker_info with auto_generated flags
+		speakerInfo := map[string]any{}
+		tsSpeakers, _ := store.GetTranscriptSpeakers(t.ID)
+		for localID, name := range speakers {
+			info := map[string]any{"name": name}
+			if sp, ok := tsSpeakers[localID]; ok {
+				info["auto_generated"] = sp.AutoGenerated
+				info["id"] = sp.ID
+			}
+			speakerInfo[localID] = info
+		}
+
+		// Get claim tree and convert to Statement format
+		tree, _ := store.GetClaimTree(t.ID)
+		statements := claimTreeToStatements(tree)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"transcript":   t,
+			"speakers":     speakers,
+			"speaker_info": speakerInfo,
+			"messages":     messages,
+			"statements":   statements,
+		})
+		return
+	}
+
+	list, err := store.ListTranscripts()
+	if err != nil {
+		http.Error(w, `{"error":"db error"}`, 500)
+		return
+	}
+	json.NewEncoder(w).Encode(list)
+}
+
+func handleAPIClaim(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	path := r.URL.Path
+	path = strings.TrimPrefix(path, "/argraphments")
+	path = strings.TrimPrefix(path, "/api/claims/")
+	id, err := strconv.ParseInt(path, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid id"}`, 400)
+		return
+	}
+	g, err := store.GetClaimGraph(id)
+	if err != nil {
+		http.Error(w, `{"error":"not found"}`, 404)
+		return
+	}
+	json.NewEncoder(w).Encode(g)
+}
+
+func handleAPISpeakers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	path := r.URL.Path
+	path = strings.TrimPrefix(path, "/argraphments")
+	path = strings.TrimPrefix(path, "/api/speakers")
+	path = strings.TrimPrefix(path, "/")
+
+	if path != "" {
+		name, _ := url.PathUnescape(path)
+
+		// PUT = rename speaker
+		if r.Method == http.MethodPut {
+			var req struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+				jsonError(w, "invalid request", 400)
+				return
+			}
+			sp, err := store.GetSpeakerByName(name)
+			if err != nil {
+				jsonError(w, "speaker not found", 404)
+				return
+			}
+			if err := store.RenameSpeaker(sp.ID, req.Name); err != nil {
+				jsonError(w, "rename failed: "+err.Error(), 500)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]string{"name": req.Name})
+			return
+		}
+
+		// GET = conversations for speaker
+		convos, err := store.GetSpeakerConversations(name)
+		if err != nil || convos == nil {
+			json.NewEncoder(w).Encode(map[string]any{
+				"name":          name,
+				"conversations": []any{},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"name":          name,
+			"conversations": convos,
+		})
+		return
+	}
+
+	speakers, err := store.ListSpeakers()
+	if err != nil {
+		jsonError(w, "db error", 500)
+		return
+	}
+	if speakers == nil {
+		speakers = []storage.SpeakerSummary{}
+	}
+	json.NewEncoder(w).Encode(speakers)
+}
+
+func handleAPIGraph(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	g, err := store.GetFullGraph()
+	if err != nil {
+		http.Error(w, `{"error":"db error"}`, 500)
+		return
+	}
+	json.NewEncoder(w).Encode(g)
+}
+
+// --- Helpers ---
+
+func jsonError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// Convert ClaimTreeNode to Statement format for frontend
+func claimTreeToStatements(nodes []storage.ClaimTreeNode) []Statement {
+	if nodes == nil {
+		return nil
+	}
+	var result []Statement
+	for _, n := range nodes {
+		s := Statement{
+			Speaker:  n.Speaker,
+			Text:     n.Text,
+			Type:     n.Type,
+			MsgIndex: n.MsgIndex,
+			Children: claimTreeToStatements(n.Children),
+		}
+		result = append(result, s)
+	}
+	return result
+}
+
+// --- Whisper API ---
+
+func whisperTranscribe(filePath string) (string, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return "", err
+	}
+	io.Copy(part, f)
+
+	writer.WriteField("model", "whisper-1")
+	writer.WriteField("response_format", "text")
+	writer.Close()
+
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/audio/transcriptions", &buf)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+openaiKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("whisper API %d: %s", resp.StatusCode, string(body))
+	}
+
+	return strings.TrimSpace(string(body)), nil
+}
+
+// --- Claude API for structure extraction ---
+
+type Statement struct {
+	Speaker   string      `json:"speaker"`
+	SpeakerID string      `json:"speaker_id,omitempty"`
+	Text      string      `json:"text"`
+	Type      string      `json:"type"`
+	MsgIndex  *int        `json:"msg_index,omitempty"`
+	Children  []Statement `json:"children"`
+	FactCheck *FactCheck  `json:"fact_check,omitempty"`
+	Fallacy   *Fallacy    `json:"fallacy,omitempty"`
+}
+
+type FactCheck struct {
+	Verdict     string `json:"verdict"`
+	Correction  string `json:"correction"`
+	SearchQuery string `json:"search_query"`
+}
+
+type Fallacy struct {
+	Name        string `json:"name"`
+	Explanation string `json:"explanation"`
+}
+
+type AnalysisResult struct {
+	Title      string      `json:"title"`
+	Statements []Statement `json:"statements"`
+}
+
+func numberTranscriptLines(transcript string) string {
+	return numberTranscriptLinesOffset(transcript, 0)
+}
+
+func numberTranscriptLinesOffset(transcript string, offset int) string {
+	lines := strings.Split(strings.TrimSpace(transcript), "\n")
+	var sb strings.Builder
+	idx := offset + 1
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("[%d] %s\n", idx, line))
+		idx++
+	}
+	return sb.String()
+}
+
+func extractStructure(transcript string) (*AnalysisResult, error) {
+	prompt := `Analyze this conversation transcript and extract a nested argument/discussion structure.
+
+IMPORTANT — Speaker identification:
+Each transcript line is pre-numbered and formatted as: [N] (speaker_id) Name: text
+The number in square brackets [N] is the msg_index. The speaker_id in parentheses (e.g. "speaker_1") is the stable identifier.
+Use the speaker_id for the "speaker_id" field and the display name for the "speaker" field.
+
+Return a JSON array of top-level statements. Each statement has:
+- "speaker": the display name of who said it
+- "speaker_id": the speaker identifier (e.g. "speaker_1")
 - "text": the core claim or statement (paraphrased concisely)
 - "type": one of "claim", "response", "question", "agreement", "rebuttal", "tangent", "clarification", "evidence"
-- "children": array of sub-statements (only if there are direct responses within the new text)
-- "parent_text": if this new statement is a direct response to an EXISTING statement, include the text of that existing statement here (so we can nest it). Omit if it's a new top-level statement.
-- "fact_check": ONLY if the statement contains an objectively false/misleading factual claim. Object with "verdict" (false/misleading/unverified/mostly-true), "correction", "search_query".
+- "msg_index": the message number this statement comes from (1-based, matching the [N] labels in the transcript)
+- "children": array of statements that are direct responses/follow-ups to this one
+- "fact_check": ONLY include this field if the statement contains a factual claim that is false, misleading, or dubiously inaccurate based on your knowledge. Object with:
+  - "verdict": one of "false", "misleading", "unverified", "mostly-true"
+  - "correction": brief explanation of what's actually true
+  - "search_query": a Google search query the user can use to verify
+- "fallacy": ONLY include this field if the statement contains a logical fallacy. Object with:
+  - "name": the name of the fallacy (e.g. "Straw Man", "Ad Hominem", "False Dichotomy", "Slippery Slope", "Appeal to Authority", "Red Herring", "Tu Quoque", "Hasty Generalization", "Circular Reasoning", "Equivocation", "Appeal to Emotion", "Anecdotal Evidence", "Cherry Picking", "Moving the Goalposts", "No True Scotsman")
+  - "explanation": brief explanation of why this is a fallacy in this context
 
+Nest responses under the statement they're responding to. A rebuttal to a claim goes as a child of that claim.
+
+FACT-CHECKING RULES:
+- Only flag objective factual claims, NOT opinions or subjective statements
+- "I think X is better" = opinion, don't flag
+- "X was invented in 1990" = factual, flag if wrong
+- Be conservative — only flag things you're confident about
+- Include fact_check field ONLY on flagged statements, omit it otherwise
+
+FALLACY DETECTION RULES:
+- Only flag clear logical fallacies, not weak arguments or disagreements
+- The fallacy must be identifiable by name (not just "bad logic")
+- Be conservative — only flag when the reasoning error is clear
+- Include fallacy field ONLY on flagged statements, omit it otherwise
+
+IMPORTANT RULES:
+- Be CONCISE: extract the key argument from each message in 1-2 statements max, not every sentence
+- NEST aggressively: responses, rebuttals, and follow-ups go as children of what they're responding to
+- The msg_index MUST exactly match the [N] number from the transcript — do NOT guess or shift
+- Use the speaker_id from the parentheses (e.g. "speaker_1") — do NOT confuse it with [N]
+
+Return a JSON object with two fields:
+- "title": a short, descriptive title for this conversation (5-10 words, no quotes)
+- "statements": the array of top-level statements as described above
+
+Return ONLY valid JSON, no markdown fences.
+
+Transcript:
+` + transcript
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"model":      "claude-sonnet-4-20250514",
+		"max_tokens": 4096,
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+	})
+
+	req, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-api-key", anthropicKey)
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("claude API %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Content) == 0 {
+		return nil, fmt.Errorf("empty response from Claude")
+	}
+
+	text := strings.TrimSpace(result.Content[0].Text)
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+
+	// Try parsing as wrapper object {title, statements}
+	var analysisResult AnalysisResult
+	if err := json.Unmarshal([]byte(text), &analysisResult); err == nil && len(analysisResult.Statements) > 0 {
+		return &analysisResult, nil
+	}
+
+	// Fallback: bare array of statements
+	var statements []Statement
+	if err := json.Unmarshal([]byte(text), &statements); err != nil {
+		return nil, fmt.Errorf("failed to parse structure: %v\nraw: %s", err, text)
+	}
+
+	return &AnalysisResult{Statements: statements}, nil
+}
+
+type IncrementalResult struct {
+	Statements []Statement          `json:"statements"`
+	Updates    []StatementUpdate    `json:"updates,omitempty"`
+}
+
+type StatementUpdate struct {
+	MsgIndex    int     `json:"msg_index"`
+	Text        *string `json:"text,omitempty"`
+	Type        *string `json:"type,omitempty"`
+	ParentText  *string `json:"parent_text,omitempty"`
+}
+
+func extractIncremental(newText string, contextText string, existing []Statement, msgOffset int, fullReview bool) (*IncrementalResult, error) {
+	existingSummary := summarizeStatements(existing, 0)
+
+	contextSection := ""
+	if contextText != "" {
+		contextSection = `
+RECENT CONVERSATION CONTEXT (for understanding flow — already analyzed):
+` + contextText + `
+`
+	}
+
+	reviewSection := ""
+	if fullReview {
+		reviewSection = `
+REVIEW MODE: In addition to analyzing new statements, review existing claims in light of the full conversation context.
+If any existing claims need corrections (e.g. misattributed speaker, wrong type, should be nested differently), include them in an "updates" array.
+Each update has:
+- "msg_index": the msg_index of the existing statement to update
+- "text": new text (only if it should change)
+- "type": new type (only if it should change)  
+- "parent_text": new parent to nest under (only if it should be moved)
+Only include updates for claims that genuinely need fixing. Most calls should have zero updates.
+`
+	}
+
+	prompt := `You are analyzing a LIVE conversation incrementally. You've already analyzed earlier parts.
+
+EXISTING ANALYSIS (for context — do NOT repeat these):
+` + existingSummary + contextSection + `
+NEW PORTION to analyze (each line is pre-numbered: [N] (speaker_id) Name: text):
+` + newText + `
+` + reviewSection + `
+Return a JSON object with:
+- "statements": array of NEW statements only (from the new portion). Each has:
+  - "speaker": display name
+  - "speaker_id": identifier (e.g. "speaker_1")
+  - "text": core claim (paraphrased concisely)
+  - "type": "claim"|"response"|"question"|"agreement"|"rebuttal"|"tangent"|"clarification"|"evidence"
+  - "msg_index": the [N] label number
+  - "children": sub-statements array (direct responses within new text only)
+  - "parent_text": text of existing statement this responds to (omit for top-level)
+  - "fact_check": only if objectively false/misleading. {"verdict","correction","search_query"}
+  - "fallacy": only if clear logical fallacy. {"name","explanation"}
+` + func() string {
+		if fullReview {
+			return `- "updates": array of corrections to existing claims (empty if none needed). Each has "msg_index" plus changed fields.
+`
+		}
+		return ""
+	}() + `
 Rules:
-- Only return statements from the NEW text
-- Do NOT regenerate or repeat existing statements
-- If the new text is just continuation of the same topic with no new claims, return an empty array
-- Keep speaker labels consistent with existing analysis
+- Only NEW statements from the new text
+- Empty "statements" array if no new claims
+- Keep speaker labels consistent
 - Only flag objective factual claims, not opinions
+- Be CONCISE: summarize each message's key argument in 1-2 statements max, not every sentence
+- NEST responses: if someone responds to or rebuts an existing claim, use parent_text to nest it
+- The msg_index MUST match the [N] number from the transcript line — do NOT guess or shift numbers
+- Use the speaker_id from the parentheses (e.g. "speaker_1") — do NOT confuse it with the [N] number
 
-Return ONLY valid JSON array, no markdown fences.`
+Return ONLY valid JSON object, no markdown fences.`
 
 	reqBody, _ := json.Marshal(map[string]any{
 		"model":      "claude-sonnet-4-20250514",
@@ -303,7 +883,23 @@ Return ONLY valid JSON array, no markdown fences.`
 	text = strings.TrimSuffix(text, "```")
 	text = strings.TrimSpace(text)
 
-	// Parse — these may have an extra "parent_text" field
+	// Try parsing as JSON object {statements, updates} first
+	var objResult struct {
+		Statements []json.RawMessage `json:"statements"`
+		Updates    []StatementUpdate `json:"updates"`
+	}
+	if err := json.Unmarshal([]byte(text), &objResult); err == nil && len(objResult.Statements) > 0 || objResult.Updates != nil {
+		var statements []Statement
+		for _, r := range objResult.Statements {
+			var s Statement
+			json.Unmarshal(r, &s)
+			s.Type = strings.ToLower(s.Type)
+			statements = append(statements, s)
+		}
+		return &IncrementalResult{Statements: statements, Updates: objResult.Updates}, nil
+	}
+
+	// Fallback: bare JSON array of statements
 	var raw []json.RawMessage
 	if err := json.Unmarshal([]byte(text), &raw); err != nil {
 		return nil, fmt.Errorf("parse error: %v", err)
@@ -311,17 +907,13 @@ Return ONLY valid JSON array, no markdown fences.`
 
 	var statements []Statement
 	for _, r := range raw {
-		var s struct {
-			Statement
-			ParentText string `json:"parent_text"`
-		}
+		var s Statement
 		json.Unmarshal(r, &s)
-		// ParentText is handled client-side for nesting
-		s.Statement.Type = strings.ToLower(s.Statement.Type)
-		statements = append(statements, s.Statement)
+		s.Type = strings.ToLower(s.Type)
+		statements = append(statements, s)
 	}
 
-	return statements, nil
+	return &IncrementalResult{Statements: statements}, nil
 }
 
 func summarizeStatements(statements []Statement, depth int) string {
@@ -339,49 +931,52 @@ func summarizeStatements(statements []Statement, depth int) string {
 	return sb.String()
 }
 
-func renderStructureRaw(statements []Statement) string {
-	var sb strings.Builder
-	sb.WriteString(`<div class="argument-tree">`)
-	for _, s := range statements {
-		renderStatement(&sb, s, 0)
-	}
-	sb.WriteString(`</div>`)
-	return sb.String()
-}
-
-// handleDiarize takes raw transcript, returns speaker-labeled JSON
-func handleDiarize(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	transcript := strings.TrimSpace(r.FormValue("transcript"))
-	if transcript == "" {
-		http.Error(w, "no transcript", 400)
-		return
-	}
-
-	result, err := diarizeTranscript(transcript)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(500)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
-}
+// --- Diarization ---
 
 type DiarizeResult struct {
-	Speakers map[string]string `json:"speakers"` // id -> detected name
-	Messages []DiarizeMessage  `json:"messages"`
+	Speakers map[string]string        `json:"speakers"`
+	Messages []storage.DiarizeMessage `json:"messages"`
 }
 
-type DiarizeMessage struct {
-	Speaker string `json:"speaker"` // speaker id
-	Text    string `json:"text"`
+func assignTimestamps(messages []storage.DiarizeMessage, segments []TimedSegment) {
+	segIdx := 0
+	for i := range messages {
+		words := strings.Fields(strings.ToLower(messages[i].Text))
+		var keyWords []string
+		for _, w := range words {
+			if len(w) > 3 {
+				keyWords = append(keyWords, w)
+				if len(keyWords) >= 5 {
+					break
+				}
+			}
+		}
+		if len(keyWords) == 0 {
+			continue
+		}
+		for j := segIdx; j < len(segments) && j < segIdx+30; j++ {
+			segText := strings.ToLower(segments[j].Text)
+			for _, kw := range keyWords {
+				if strings.Contains(segText, kw) {
+					ms := segments[j].StartMs
+					messages[i].StartMs = &ms
+					segIdx = j
+					goto nextMsg
+				}
+			}
+		}
+	nextMsg:
+	}
+	// Compute end_ms: each message ends when the next one starts
+	for i := range messages {
+		if messages[i].StartMs == nil {
+			continue
+		}
+		if i+1 < len(messages) && messages[i+1].StartMs != nil {
+			end := *messages[i+1].StartMs
+			messages[i].EndMs = &end
+		}
+	}
 }
 
 func diarizeTranscript(transcript string) (*DiarizeResult, error) {
@@ -471,211 +1066,57 @@ Transcript:
 	return &result, nil
 }
 
-func htmxError(w http.ResponseWriter, msg string) {
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, `<div class="error">%s</div>`, template.HTMLEscapeString(msg))
-}
+// --- Persistence ---
 
-// --- Whisper API ---
-
-func whisperTranscribe(filePath string) (string, error) {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return "", err
+func persistStatements(audioPath string, statements []Statement, speakers map[string]string, messages []storage.DiarizeMessage, speakerAutoGen map[string]bool, existingID int64) int64 {
+	if store == nil {
+		return 0
 	}
-	defer f.Close()
-
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-
-	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
-	if err != nil {
-		return "", err
-	}
-	io.Copy(part, f)
-
-	writer.WriteField("model", "whisper-1")
-	writer.WriteField("response_format", "text")
-	writer.Close()
-
-	req, err := http.NewRequest("POST", "https://api.openai.com/v1/audio/transcriptions", &buf)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+openaiKey)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("whisper API %d: %s", resp.StatusCode, string(body))
-	}
-
-	return strings.TrimSpace(string(body)), nil
-}
-
-// --- Claude API for structure extraction ---
-
-type Statement struct {
-	Speaker   string      `json:"speaker"`
-	Text      string      `json:"text"`
-	Type      string      `json:"type"` // claim, response, question, agreement, rebuttal, tangent
-	Children  []Statement `json:"children"`
-	FactCheck *FactCheck  `json:"fact_check,omitempty"`
-}
-
-type FactCheck struct {
-	Verdict     string `json:"verdict"`      // "false", "misleading", "unverified", "mostly-true"
-	Correction  string `json:"correction"`   // what's actually true
-	SearchQuery string `json:"search_query"` // google search query to verify
-}
-
-func extractStructure(transcript string) ([]Statement, error) {
-	prompt := `Analyze this conversation transcript and extract a nested argument/discussion structure.
-
-IMPORTANT — Speaker identification:
-The transcript may already have speaker labels (e.g. "Speaker 1: ..." or names). If so, use them directly.
-If not, identify distinct speakers from context clues: opinion shifts, turn-taking, different perspectives.
-Be consistent — the same person should always get the same label.
-
-Return a JSON array of top-level statements. Each statement has:
-- "speaker": who said it
-- "text": the core claim or statement (paraphrased concisely)
-- "type": one of "claim", "response", "question", "agreement", "rebuttal", "tangent", "clarification", "evidence"
-- "children": array of statements that are direct responses/follow-ups to this one
-- "fact_check": ONLY include this field if the statement contains a factual claim that is false, misleading, or dubiously inaccurate based on your knowledge. Object with:
-  - "verdict": one of "false", "misleading", "unverified", "mostly-true"
-  - "correction": brief explanation of what's actually true
-  - "search_query": a Google search query the user can use to verify
-
-Nest responses under the statement they're responding to. A rebuttal to a claim goes as a child of that claim.
-
-FACT-CHECKING RULES:
-- Only flag objective factual claims, NOT opinions or subjective statements
-- "I think X is better" = opinion, don't flag
-- "X was invented in 1990" = factual, flag if wrong
-- Be conservative — only flag things you're confident about
-- Include fact_check field ONLY on flagged statements, omit it otherwise
-
-Return ONLY valid JSON, no markdown fences.
-
-Transcript:
-` + transcript
-
-	reqBody, _ := json.Marshal(map[string]any{
-		"model":      "claude-sonnet-4-20250514",
-		"max_tokens": 4096,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
-	})
-
-	req, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("x-api-key", anthropicKey)
-	req.Header.Set("content-type", "application/json")
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("claude API %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-	if len(result.Content) == 0 {
-		return nil, fmt.Errorf("empty response from Claude")
-	}
-
-	var statements []Statement
-	text := strings.TrimSpace(result.Content[0].Text)
-	// Strip markdown fences if Claude adds them anyway
-	text = strings.TrimPrefix(text, "```json")
-	text = strings.TrimPrefix(text, "```")
-	text = strings.TrimSuffix(text, "```")
-	text = strings.TrimSpace(text)
-
-	if err := json.Unmarshal([]byte(text), &statements); err != nil {
-		return nil, fmt.Errorf("failed to parse structure: %v\nraw: %s", err, text)
-	}
-
-	return statements, nil
-}
-
-func renderStructure(statements []Statement) string {
-	var sb strings.Builder
-	sb.WriteString(`<div class="argument-tree">`)
-	for _, s := range statements {
-		renderStatement(&sb, s, 0)
-	}
-	sb.WriteString(`</div>`)
-	sb.WriteString(`<div class="action-row"><button class="btn btn-secondary" onclick="showInputs()">New</button></div>`)
-	return sb.String()
-}
-
-func renderStatement(sb *strings.Builder, s Statement, depth int) {
-	hasChildren := len(s.Children) > 0
-	typeClass := template.HTMLEscapeString(s.Type)
-	speaker := template.HTMLEscapeString(s.Speaker)
-	text := template.HTMLEscapeString(s.Text)
-
-	flagged := ""
-	if s.FactCheck != nil {
-		flagged = " flagged flagged-" + template.HTMLEscapeString(s.FactCheck.Verdict)
-	}
-
-	sb.WriteString(fmt.Sprintf(`<div class="statement depth-%d type-%s%s"`, depth, typeClass, flagged))
-	sb.WriteString(` >`)
-
-	factCheckHTML := renderFactCheck(s.FactCheck)
-
-	if hasChildren {
-		sb.WriteString(`<details>`)
-		sb.WriteString(fmt.Sprintf(`<summary><span class="type-badge">%s</span> <span class="speaker">%s:</span> %s <span class="child-count">(%d)</span>%s</summary>`, typeClass, speaker, text, countDescendants(s), factCheckHTML))
-		sb.WriteString(`<div class="children">`)
-		for _, child := range s.Children {
-			renderStatement(sb, child, depth+1)
-		}
-		sb.WriteString(`</div></details>`)
+	var tid int64
+	var err error
+	if existingID > 0 {
+		tid = existingID
+		err = store.UpdateTranscript(tid, audioPath, "")
 	} else {
-		sb.WriteString(fmt.Sprintf(`<div class="leaf"><span class="type-badge">%s</span> <span class="speaker">%s:</span> %s%s</div>`, typeClass, speaker, text, factCheckHTML))
+		tid, err = store.SaveTranscript(audioPath, "")
+	}
+	if err != nil {
+		log.Printf("persistStatements: save transcript: %v", err)
+		return 0
 	}
 
-	sb.WriteString(`</div>`)
-}
-
-func renderFactCheck(fc *FactCheck) string {
-	if fc == nil {
-		return ""
+	// Save diarization data if available
+	if speakers != nil && len(messages) > 0 {
+		if err := store.SaveDiarization(tid, speakers, messages); err != nil {
+			log.Printf("persistStatements: save diarization: %v", err)
+		}
+		// Save speakers with explicit auto_generated flags from frontend
+		if speakerAutoGen != nil {
+			store.SaveSpeakersWithFlags(tid, speakers, speakerAutoGen)
+		}
 	}
-	verdict := template.HTMLEscapeString(fc.Verdict)
-	correction := template.HTMLEscapeString(fc.Correction)
-	searchURL := "https://www.google.com/search?q=" + url.QueryEscape(fc.SearchQuery)
 
-	return fmt.Sprintf(`<div class="fact-check verdict-%s">
-		<span class="fact-verdict">⚠ %s</span>
-		<span class="fact-correction">%s</span>
-		<a href="%s" target="_blank" rel="noopener" class="fact-source">verify ↗</a>
-	</div>`, verdict, verdict, correction, searchURL)
+	var walk func(stmts []Statement, parentClaimID *int64, pos *int)
+	walk = func(stmts []Statement, parentClaimID *int64, pos *int) {
+		for _, s := range stmts {
+			cid, err := store.SaveClaim(s.Text, s.Type)
+			if err != nil {
+				log.Printf("persistStatements: save claim: %v", err)
+				continue
+			}
+			store.SaveOccurrence(cid, tid, s.Speaker, *pos, s.Text, s.MsgIndex)
+			*pos++
+			if parentClaimID != nil {
+				store.SaveEdge(*parentClaimID, cid, s.Type, tid)
+			}
+			if len(s.Children) > 0 {
+				walk(s.Children, &cid, pos)
+			}
+		}
+	}
+	pos := 0
+	walk(statements, nil, &pos)
+	return tid
 }
 
 func countDescendants(s Statement) int {

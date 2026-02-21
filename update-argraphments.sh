@@ -11,7 +11,7 @@ if [ -f "$HOME/bin/.env" ]; then
 fi
 
 echo "Syncing files to server..."
-sshpass -p "$KAYUSHKINCOM_PASS" rsync -avz --delete --exclude='.git' --exclude='uploads/' --exclude='.env' "$SCRIPT_DIR/" "$REMOTE:~/argraphments/"
+sshpass -p "$KAYUSHKINCOM_PASS" rsync -avz --delete --exclude='.git' --exclude='uploads/' --exclude='.env' --exclude='*.db' --exclude='*.db-journal' --exclude='*.db-wal' --exclude='*.db-shm' "$SCRIPT_DIR/" "$REMOTE:~/argraphments/"
 
 echo "Building and restarting on server..."
 sshpass -p "$KAYUSHKINCOM_PASS" ssh "$REMOTE" 'export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH" && cd ~/argraphments && go build -o argraphments-server && printf "%s\n" "'"$KAYUSHKINCOM_PASS"'" | sudo -S mv argraphments-server /usr/local/bin/ && printf "%s\n" "'"$KAYUSHKINCOM_PASS"'" | sudo -S systemctl restart argraphments'
