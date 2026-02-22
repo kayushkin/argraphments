@@ -550,11 +550,12 @@ func claimTreeToStatements(nodes []storage.ClaimTreeNode) []Statement {
 	var result []Statement
 	for _, n := range nodes {
 		s := Statement{
-			Speaker:  n.Speaker,
-			Text:     n.Text,
-			Type:     n.Type,
-			MsgIndex: n.MsgIndex,
-			Children: claimTreeToStatements(n.Children),
+			Speaker:   n.Speaker,
+			SpeakerID: n.Speaker, // Set speaker_id to match (will be the speaker key like "speaker_1")
+			Text:      n.Text,
+			Type:      n.Type,
+			MsgIndex:  n.MsgIndex,
+			Children:  claimTreeToStatements(n.Children),
 		}
 		result = append(result, s)
 	}
@@ -1105,7 +1106,12 @@ func persistStatements(audioPath string, statements []Statement, speakers map[st
 				log.Printf("persistStatements: save claim: %v", err)
 				continue
 			}
-			store.SaveOccurrence(cid, tid, s.Speaker, *pos, s.Text, s.MsgIndex)
+			// Save speaker_id if available, otherwise fall back to speaker name
+			speakerKey := s.SpeakerID
+			if speakerKey == "" {
+				speakerKey = s.Speaker
+			}
+			store.SaveOccurrence(cid, tid, speakerKey, *pos, s.Text, s.MsgIndex)
 			*pos++
 			if parentClaimID != nil {
 				store.SaveEdge(*parentClaimID, cid, s.Type, tid)
