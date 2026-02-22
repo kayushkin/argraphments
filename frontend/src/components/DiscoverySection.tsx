@@ -17,10 +17,11 @@ export default function DiscoverySection() {
 
   if (!speakers.length && !convos.length) return null;
 
-  const loadConvo = (slug: string) => {
+  const loadConvo = (slug: string, e: React.MouseEvent) => {
+    e.preventDefault();
     setSlug(slug);
     setView('session');
-    history.pushState({ slug }, '', bp + '/' + slug);
+    history.pushState({ slug }, '', bp + '/convo/' + slug);
   };
 
   const loadSpeaker = (name: string, e: React.MouseEvent) => {
@@ -60,10 +61,15 @@ export default function DiscoverySection() {
               const date = new Date(t.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
               const title = t.title ? t.title.substring(0, 60) : 'Untitled';
               return (
-                <div key={t.slug} className="conversation-item" onClick={() => loadConvo(t.slug)}>
+                <a
+                  key={t.slug}
+                  className="conversation-item"
+                  href={bp + '/convo/' + t.slug}
+                  onClick={(e) => loadConvo(t.slug, e)}
+                >
                   <div className="conversation-title">{t.slug} — {title}</div>
                   <div className="conversation-meta">{date}</div>
-                </div>
+                </a>
               );
             })}
           </div>

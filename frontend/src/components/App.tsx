@@ -22,7 +22,12 @@ function Router() {
     } else if (path.startsWith('speaker/')) {
       setSpeakerPageName(decodeURIComponent(path.substring(8)));
       setView('speaker');
+    } else if (path.startsWith('convo/')) {
+      const slug = path.substring(6);
+      setSlug(slug);
+      setView('session');
     } else if (path && !path.includes('/') && !path.includes('.')) {
+      // Fallback: old-style bare slug URLs (for backward compatibility)
       setSlug(path);
       setView('session');
     }

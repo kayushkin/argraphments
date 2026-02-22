@@ -16,10 +16,11 @@ export default function SpeakerDetailPage() {
       .catch(() => setConvos([]));
   }, [speakerPageName]);
 
-  const loadConvo = (slug: string) => {
+  const loadConvo = (slug: string, e: React.MouseEvent) => {
+    e.preventDefault();
     setSlug(slug);
     setView('session');
-    history.pushState({ slug }, '', bp + '/' + slug);
+    history.pushState({ slug }, '', bp + '/convo/' + slug);
   };
 
   return (
@@ -40,10 +41,15 @@ export default function SpeakerDetailPage() {
                   });
                   const title = c.title ? c.title.substring(0, 80) : 'Untitled';
                   return (
-                    <div key={c.slug} className="conversation-item" onClick={() => loadConvo(c.slug)}>
+                    <a
+                      key={c.slug}
+                      className="conversation-item"
+                      href={bp + '/convo/' + c.slug}
+                      onClick={(e) => loadConvo(c.slug, e)}
+                    >
                       <div className="conversation-title">{c.slug} — {title}</div>
                       <div className="conversation-meta">{date} · {c.claim_count} claims</div>
-                    </div>
+                    </a>
                   );
                 })}
               </div>

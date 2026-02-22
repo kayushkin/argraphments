@@ -59,6 +59,7 @@ func main() {
 	for _, prefix := range []string{"/argraphments", ""} {
 		p := prefix
 		mux.HandleFunc(p+"/", handleIndex)
+		mux.HandleFunc(p+"/convo/", handleIndex) // conversation URLs
 		mux.Handle(p+"/static/", http.StripPrefix(p+"/static/", staticFS))
 		mux.Handle(p+"/assets/", http.StripPrefix(p, distAssetsFS))
 		mux.HandleFunc(p+"/api/transcribe", handleAPITranscribe)

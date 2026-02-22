@@ -13,10 +13,11 @@ export default function ConversationsListPage() {
     listTranscripts().then(setConvos).catch(() => setConvos([]));
   }, []);
 
-  const loadConvo = (slug: string) => {
+  const loadConvo = (slug: string, e: React.MouseEvent) => {
+    e.preventDefault();
     setSlug(slug);
     setView('session');
-    history.pushState({ slug }, '', bp + '/' + slug);
+    history.pushState({ slug }, '', bp + '/convo/' + slug);
   };
 
   return (
@@ -36,13 +37,18 @@ export default function ConversationsListPage() {
               });
               const title = t.title ? t.title.substring(0, 80) : 'Untitled';
               return (
-                <div key={t.slug} className="list-item" onClick={() => loadConvo(t.slug)}>
+                <a
+                  key={t.slug}
+                  className="list-item"
+                  href={bp + '/convo/' + t.slug}
+                  onClick={(e) => loadConvo(t.slug, e)}
+                >
                   <div>
                     <span className="list-item-name">{t.slug}</span>
                     <span className="list-item-title">{title}</span>
                   </div>
                   <span className="list-item-meta">{date}</span>
-                </div>
+                </a>
               );
             })}
           </div>

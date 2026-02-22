@@ -43,6 +43,7 @@ func setupMux() *http.ServeMux {
 	for _, prefix := range []string{"/argraphments", ""} {
 		p := prefix
 		mux.HandleFunc(p+"/", handleIndex)
+		mux.HandleFunc(p+"/convo/", handleIndex) // conversation URLs
 		mux.Handle(p+"/static/", http.StripPrefix(p+"/static/", staticFS))
 		mux.HandleFunc(p+"/api/session/new", handleAPINewSession)
 		mux.HandleFunc(p+"/api/transcribe", handleAPITranscribe)
@@ -400,6 +401,24 @@ func TestE2E_SlugURL_ServesIndex(t *testing.T) {
 
 	// A slug URL should serve the SPA index
 	for _, path := range []string{"/bold-fox", "/argraphments/bold-fox", "/"} {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("path %s: expected 200, got %d", path, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "argraphments") {
+			t.Fatalf("path %s: should serve SPA index", path)
+		}
+	}
+}
+
+func TestE2E_ConvoURL_ServesIndex(t *testing.T) {
+	setupTestStore(t)
+	mux := setupMux()
+
+	// New /convo/{slug} URL format should serve the SPA index
+	for _, path := range []string{"/convo/bold-fox", "/argraphments/convo/bold-fox"} {
 		req := httptest.NewRequest("GET", path, nil)
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)

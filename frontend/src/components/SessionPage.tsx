@@ -63,8 +63,9 @@ export default function SessionPage() {
   useEffect(() => {
     if (!slug || diarizeData) return;
     const bp = getBasePath();
-    if (window.location.pathname !== bp + '/' + slug) {
-      history.pushState({ slug }, '', bp + '/' + slug);
+    const expectedPath = bp + '/convo/' + slug;
+    if (window.location.pathname !== expectedPath) {
+      history.pushState({ slug }, '', expectedPath);
     }
 
     getTranscript(slug)
