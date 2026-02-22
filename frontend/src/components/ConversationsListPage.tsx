@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { getBasePath, listTranscripts } from '../api';
 import { useSession } from '../context/SessionContext';
 import type { TranscriptListItem } from '../types';
+import { getConversationDisplayTitle } from '../utils/format';
 import AppHeader from './AppHeader';
 
 export default function ConversationsListPage() {
@@ -35,7 +36,7 @@ export default function ConversationsListPage() {
               const date = new Date(t.created_at).toLocaleDateString('en-US', {
                 month: 'short', day: 'numeric', year: 'numeric',
               });
-              const title = t.title ? t.title.substring(0, 80) : 'Untitled';
+              const displayTitle = getConversationDisplayTitle(t.title, t.slug);
               return (
                 <a
                   key={t.slug}
@@ -44,8 +45,7 @@ export default function ConversationsListPage() {
                   onClick={(e) => loadConvo(t.slug, e)}
                 >
                   <div>
-                    <span className="list-item-name">{t.slug}</span>
-                    <span className="list-item-title">{title}</span>
+                    <span className="list-item-name">{displayTitle}</span>
                   </div>
                   <span className="list-item-meta">{date}</span>
                 </a>

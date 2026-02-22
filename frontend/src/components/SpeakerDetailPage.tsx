@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { getBasePath, getSpeaker } from '../api';
 import { useSession } from '../context/SessionContext';
 import type { SpeakerConversation } from '../types';
+import { getConversationDisplayTitle } from '../utils/format';
 import AppHeader from './AppHeader';
 
 export default function SpeakerDetailPage() {
@@ -39,7 +40,7 @@ export default function SpeakerDetailPage() {
                   const date = new Date(c.created_at).toLocaleDateString('en-US', {
                     month: 'short', day: 'numeric', year: 'numeric',
                   });
-                  const title = c.title ? c.title.substring(0, 80) : 'Untitled';
+                  const displayTitle = getConversationDisplayTitle(c.title, c.slug);
                   return (
                     <a
                       key={c.slug}
@@ -47,7 +48,7 @@ export default function SpeakerDetailPage() {
                       href={bp + '/convo/' + c.slug}
                       onClick={(e) => loadConvo(c.slug, e)}
                     >
-                      <div className="conversation-title">{c.slug} — {title}</div>
+                      <div className="conversation-title">{displayTitle}</div>
                       <div className="conversation-meta">{date} · {c.claim_count} claims</div>
                     </a>
                   );

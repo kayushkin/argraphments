@@ -3,6 +3,7 @@ import { getBasePath, listSpeakers, listTranscripts } from '../api';
 import { useSession } from '../context/SessionContext';
 import { useSpeakers } from '../context/SpeakerContext';
 import type { SpeakerSummary, TranscriptListItem } from '../types';
+import { getConversationDisplayTitle } from '../utils/format';
 
 export default function DiscoverySection() {
   const [speakers, setSpeakers] = useState<SpeakerSummary[]>([]);
@@ -59,7 +60,7 @@ export default function DiscoverySection() {
           <div className="conversations-list">
             {convos.slice(0, 10).map((t) => {
               const date = new Date(t.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-              const title = t.title ? t.title.substring(0, 60) : 'Untitled';
+              const displayTitle = getConversationDisplayTitle(t.title, t.slug);
               return (
                 <a
                   key={t.slug}
@@ -67,7 +68,7 @@ export default function DiscoverySection() {
                   href={bp + '/convo/' + t.slug}
                   onClick={(e) => loadConvo(t.slug, e)}
                 >
-                  <div className="conversation-title">{t.slug} — {title}</div>
+                  <div className="conversation-title">{displayTitle}</div>
                   <div className="conversation-meta">{date}</div>
                 </a>
               );
