@@ -4,3 +4,9 @@ uploads/
 node_modules/
 static/dist/
 storage/
+.openclaw/.openclaw/
+.openclaw/BOOTSTRAP.md
+.openclaw/HEARTBEAT.md
+.openclaw/IDENTITY.md
+.openclaw/TOOLS.md
+.openclaw/USER.md
