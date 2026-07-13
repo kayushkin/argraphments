@@ -133,4 +133,11 @@ RESTARTS="$(systemctl show "$UNIT_NAME" -p NRestarts --value)"
 echo "    $UNIT_NAME active, NRestarts=$RESTARTS"
 echo "    smoke test OK"
 
+# The vhost is what puts argraphments.com on the internet: TLS, the HTTP->HTTPS
+# redirect, the ACME challenge root and the 50M upload limit the audio uploads
+# need. It is part of the deploy, not something to hand-edit in /etc/nginx — a
+# vhost no repo tracks survives only as long as this box does.
+echo "==> Installing nginx vhost..."
+./deploy/nginx/install.sh
+
 echo "==> Done."
