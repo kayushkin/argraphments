@@ -122,8 +122,26 @@ func NormHash(text string) string {
 	return fmt.Sprintf("%x", h)
 }
 
+// dataSourceName builds the sqlite DSN for a database path.
+//
+// foreign_keys MUST be set here rather than with a PRAGMA statement after
+// Open: it is a per-connection setting, and *sql.DB is a pool. A one-shot
+// db.Exec("PRAGMA foreign_keys=ON") reaches only whichever connection the
+// pool happened to hand out; every other connection keeps SQLite's default
+// of OFF, so the REFERENCES clauses in our schema are enforced or not
+// depending on which connection a write lands on. Putting it in the DSN
+// applies it to every connection the pool opens. (journal_mode=WAL needs no
+// such care: it is a property of the database file, so one Exec is permanent.)
+//
+// _pragma=... is modernc's syntax and it is the only one that works here.
+// The mattn/go-sqlite3 spelling (_foreign_keys=on) is silently ignored by
+// this driver, as is any other unrecognised key — hence the check in NewStore.
+func dataSourceName(dbPath string) string {
+	return dbPath + "?_pragma=foreign_keys(1)"
+}
+
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", dataSourceName(dbPath))
 	if err != nil {
 		return nil, err
 	}
@@ -131,9 +149,16 @@ func NewStore(dbPath string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+	// An unrecognised DSN key is silently ignored by the driver, so prove the
+	// setting actually took effect instead of trusting the connection string.
+	var foreignKeysEnabled bool
+	if err := db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeysEnabled); err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("read foreign_keys pragma: %w", err)
+	}
+	if !foreignKeysEnabled {
+		db.Close()
+		return nil, fmt.Errorf("foreign key enforcement is off: %q did not enable it", dataSourceName(dbPath))
 	}
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
@@ -461,10 +486,23 @@ func (s *Store) RenameSpeaker(id int64, newName string) error {
 	var existingID int64
 	err := s.db.QueryRow("SELECT id FROM speakers WHERE name = ? AND id != ?", newName, id).Scan(&existingID)
 	if err == nil {
-		// Merge: reassign all transcript_speakers to the existing speaker
-		s.db.Exec("UPDATE transcript_speakers SET speaker_id = ? WHERE speaker_id = ?", existingID, id)
-		s.db.Exec("DELETE FROM speakers WHERE id = ?", id)
-		return nil
+		// Merge: reassign this speaker's transcripts to the existing speaker,
+		// then drop it. Both statements must land together — the reassignment
+		// is what leaves the speaker row unreferenced and therefore deletable,
+		// so a partial merge would either strand the rows or fail the delete.
+		tx, err := s.db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin speaker merge: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec("UPDATE transcript_speakers SET speaker_id = ? WHERE speaker_id = ?", existingID, id); err != nil {
+			return fmt.Errorf("reassign transcripts from speaker %d to %d: %w", id, existingID, err)
+		}
+		if _, err := tx.Exec("DELETE FROM speakers WHERE id = ?", id); err != nil {
+			return fmt.Errorf("delete merged speaker %d: %w", id, err)
+		}
+		return tx.Commit()
 	}
 	_, err = s.db.Exec("UPDATE speakers SET name = ?, auto_generated = 0 WHERE id = ?", newName, id)
 	return err
