@@ -1,5 +1,7 @@
-# Built binary, anchored to the repo root.
+# Built binaries, anchored to the repo root. deploy.sh builds argraphments-server
+# (the name the unit's ExecStart declares); /argraphments is the older name.
 /argraphments
+/argraphments-server
 
 # NOTE: there is deliberately NO `storage/` rule here. This tree's storage/ is a
 # Go SOURCE package (storage.go, storage_test.go — imported by main.go,
