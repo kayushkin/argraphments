@@ -1,12 +1,52 @@
-argraphments
-.env
+# Built binary, anchored to the repo root.
+/argraphments
+
+# NOTE: there is deliberately NO `storage/` rule here. This tree's storage/ is a
+# Go SOURCE package (storage.go, storage_test.go — imported by main.go,
+# sample.go, and both test files). Ignoring it, as an earlier version of this
+# file did, meant the committed tree could not build. Runtime data lives in
+# ./uploads and ./argraphments.db, not in storage/.
+
+# Runtime data: uploaded audio and the transcript DB (personal content — never
+# commit either).
 uploads/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Frontend build output and deps.
 node_modules/
 static/dist/
-storage/
+
+# Agent scaffolding that is host-local.
 .openclaw/.openclaw/
 .openclaw/BOOTSTRAP.md
 .openclaw/HEARTBEAT.md
 .openclaw/IDENTITY.md
 .openclaw/TOOLS.md
 .openclaw/USER.md
+
+# Host-local config (machine-specific systemd drop-ins, dev secrets, etc.).
+# Put anything that should never leave this machine under ./.local/
+/.local/
+
+# Defensive: never accidentally commit credentials. This tree's .env holds live
+# OPENAI_API_KEY / ANTHROPIC_API_KEY values.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+credentials.*
+secrets.*
+
+# The globs above target secret *data* files, but they also match source
+# (credentials.* once swallowed llm-bridge-server's internal/harness/credentials.go,
+# leaving the committed tree unbuildable while `git status` stayed clean).
+# Source is never a secret.
+!*.go
+!*.sql
+!*.ts
+!*.tsx

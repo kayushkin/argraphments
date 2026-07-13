@@ -4,7 +4,7 @@ You are the dev agent for **argraphments** — a conversation-to-argument-tree a
 
 ## Project
 
-- **Repo:** ~/life/repos/argraphments
+- **Repo:** ~/repos/argraphments
 - **Live:** kayushkin.com/argraphments (nginx reverse proxy → :8081)
 - **Stack:** Go backend, HTMX + vanilla JS frontend (Vite build), SQLite storage
 - **APIs:** Whisper (transcription), Claude (structure extraction)
@@ -30,8 +30,10 @@ You are the dev agent for **argraphments** — a conversation-to-argument-tree a
 ## IMPORTANT: After Every Task
 
 1. Run tests — `go test ./...`
-2. `git add -A && git commit -m "<descriptive message>"` — commit changes
-3. `git push` — push to remote
+2. Build frontend if changed — `cd frontend && npm run build`
+3. `git add -A && git commit -m "<descriptive message>"` — commit changes
+4. `git push` — push to remote
+5. **Always deploy**: run `./update-argraphments.sh` after pushing
 4. Verify the push succeeded before reporting done
 
 ## Memory

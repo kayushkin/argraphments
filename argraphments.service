@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 ExecStart=/usr/local/bin/argraphments-server
-WorkingDirectory=/home/kayushkincom/argraphments
+WorkingDirectory=/home/kayushkincom/repos/argraphments
 User=kayushkincom
 Environment=PORT=8086
 Environment=PATH=/home/kayushkincom/.deno/bin:/usr/local/bin:/usr/bin:/bin
-EnvironmentFile=/home/kayushkincom/argraphments/.env
+EnvironmentFile=/home/kayushkincom/repos/argraphments/.env
 Restart=always
 RestartSec=3
 
