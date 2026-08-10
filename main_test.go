@@ -662,6 +662,9 @@ func TestJSSyntax(t *testing.T) {
 }
 
 func TestDiarizeEndpoint(t *testing.T) {
+	if anthropicKey == "" {
+		t.Skip("ANTHROPIC_API_KEY not set")
+	}
 	setupTestStore(t)
 	mux := setupMux()
 
@@ -673,14 +676,14 @@ func TestDiarizeEndpoint(t *testing.T) {
 	mux.ServeHTTP(w, req)
 
 	if w.Code != 200 {
-		t.Skip("diarize requires API key or returned error:", w.Body.String())
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var result map[string]any
 	json.Unmarshal(w.Body.Bytes(), &result)
 
 	if _, ok := result["error"]; ok {
-		t.Skip("diarize requires API key:", result["error"])
+		t.Fatalf("diarize returned an error: %v", result["error"])
 	}
 
 	speakers, ok := result["speakers"].(map[string]any)
@@ -696,6 +699,9 @@ func TestDiarizeEndpoint(t *testing.T) {
 }
 
 func TestDiarizeWithSegments(t *testing.T) {
+	if anthropicKey == "" {
+		t.Skip("ANTHROPIC_API_KEY not set")
+	}
 	setupTestStore(t)
 	mux := setupMux()
 
@@ -713,13 +719,13 @@ func TestDiarizeWithSegments(t *testing.T) {
 	mux.ServeHTTP(w, req)
 
 	if w.Code != 200 {
-		t.Skip("diarize requires API key or returned error:", w.Body.String())
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var result map[string]any
 	json.Unmarshal(w.Body.Bytes(), &result)
 	if _, ok := result["error"]; ok {
-		t.Skip("diarize requires API key:", result["error"])
+		t.Fatalf("diarize returned an error: %v", result["error"])
 	}
 
 	messages, ok := result["messages"].([]any)
@@ -789,6 +795,9 @@ func TestUtterancesPersistence(t *testing.T) {
 }
 
 func TestSampleConvoFlow(t *testing.T) {
+	if anthropicKey == "" {
+		t.Skip("ANTHROPIC_API_KEY not set")
+	}
 	setupTestStore(t)
 	mux := setupMux()
 
@@ -814,12 +823,12 @@ func TestSampleConvoFlow(t *testing.T) {
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != 200 {
-		t.Skip("diarize requires API key or returned error:", w.Code)
+		t.Fatalf("diarize returned %d: %s", w.Code, w.Body.String())
 	}
 	var diarize map[string]any
 	json.Unmarshal(w.Body.Bytes(), &diarize)
 	if _, ok := diarize["error"]; ok {
-		t.Skip("requires API key")
+		t.Fatalf("diarize returned an error: %v", diarize["error"])
 	}
 
 	// 3. Retrieve by slug — should serve SPA
