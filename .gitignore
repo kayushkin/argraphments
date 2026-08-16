@@ -52,3 +52,8 @@ secrets.*
 !*.sql
 !*.ts
 !*.tsx
+
+# Python byte-code from scripts/ (the sabotage scorer). Travels with the engine
+# when it is copied into a new repo and dirties the tree if left untracked,
+# which is the exact signal a nightly pass reads as "another agent works here".
+__pycache__/
