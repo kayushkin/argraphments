@@ -387,11 +387,6 @@ CASES = [
         "the reply is not trimmed before parsing, so a leading newline breaks it",
         in_parse("\ttext := strings.TrimSpace(result.Content[0].Text)",
                  "\ttext := result.Content[0].Text"),
-        expected_unnoticed=(
-            "the final `text = strings.TrimSpace(text)` two lines down trims whatever the first "
-            "call would have, and encoding/json ignores leading whitespace anyway, so this edit "
-            "cannot change an outcome the suite can observe — genuinely redundant, not untested"
-        ),
     ),
     Case(
         "statement types are no longer lowercased, so CLAIM and claim become different kinds",
@@ -533,7 +528,7 @@ CASES = [
     ),
     Case(
         "the JSON branch is chosen for every content type, so multipart bodies fail to decode",
-        in_handler_head('\tif strings.Contains(ct, "application/json") {', "\tif true {"),
+        in_handler_head('strings.Contains(ct, "application/json")', 'strings.Contains(ct, "")'),
     ),
     Case(
         "the response content type is dropped",
@@ -568,11 +563,6 @@ CASES = [
         "the model name changes to another Sonnet build",
         in_request('"model":      "claude-sonnet-4-20250514",',
                    '"model":      "claude-sonnet-4-5-20250929",'),
-        expected_unnoticed=(
-            "TestExtractIncrementalPostsToAnthropicWithTheExpectedHeaders pins the exact model "
-            "string, so this IS caught — listed here only because a model bump is a legitimate "
-            "edit and whoever makes it should expect one red test, not a mystery"
-        ),
     ),
     Case(
         "msgOffset is threaded into the numbering it was clearly meant for",

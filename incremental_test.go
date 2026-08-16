@@ -33,6 +33,18 @@ import (
 	"testing"
 )
 
+// contextSentinel is the fixture value for context_text.
+//
+// ⚠️ It must NOT be a word the prompt template already contains. The first
+// version of these tests used "earlier" — and the template opens with "You've
+// already analyzed earlier parts.", so `Contains(prompt, "earlier")` was true
+// whether or not context_text was forwarded at all. Two scorer cases that
+// broke the forwarding scored UNNOTICED because of it.
+//
+// > A fixture value that is a substring of the template it is injected into
+// > cannot detect its own absence.
+const contextSentinel = "ctx-sentinel-9f3a1c-do-not-put-this-word-in-the-prompt"
+
 // --- the seam ---------------------------------------------------------------
 
 // fakeAnthropic answers every request with one canned Claude message envelope
@@ -388,14 +400,14 @@ func TestExtractIncrementalIncludesTheContextSectionWhenGivenOne(t *testing.T) {
 	fake := &fakeAnthropic{replyText: `{"statements":[],"updates":[]}`}
 	installFakeAnthropic(t, fake)
 
-	if _, err := extractIncremental("[1] (speaker_1) A: hi", "earlier chatter", nil, 0, false); err != nil {
+	if _, err := extractIncremental("[1] (speaker_1) A: hi", contextSentinel, nil, 0, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	prompt := fake.sentPrompt(t)
 	if !strings.Contains(prompt, "RECENT CONVERSATION CONTEXT") {
 		t.Error("context header missing")
 	}
-	if !strings.Contains(prompt, "earlier chatter") {
+	if !strings.Contains(prompt, contextSentinel) {
 		t.Error("context body missing")
 	}
 	if !strings.Contains(prompt, "already analyzed") {
@@ -863,7 +875,7 @@ func TestHandleAPIAnalyzeIncrementalReturnsTheParsedResult(t *testing.T) {
 
 	body, err := json.Marshal(map[string]any{
 		"new_text":     "[7] (speaker_1) Alice: the sky is blue",
-		"context_text": "earlier",
+		"context_text": contextSentinel,
 		"existing":     []Statement{{Type: "claim", Speaker: "Bob", Text: "prior"}},
 		"full_review":  true,
 	})
@@ -894,7 +906,7 @@ func TestHandleAPIAnalyzeIncrementalReturnsTheParsedResult(t *testing.T) {
 
 	// The handler must forward every field it decoded, not just new_text.
 	prompt := fake.sentPrompt(t)
-	if !strings.Contains(prompt, "earlier") {
+	if !strings.Contains(prompt, contextSentinel) {
 		t.Error("context_text was not forwarded")
 	}
 	if !strings.Contains(prompt, "- [claim] Bob: prior") {
