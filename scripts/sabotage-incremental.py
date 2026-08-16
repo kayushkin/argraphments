@@ -150,6 +150,54 @@ def in_parse(old, new):
     return [(PARSE_TAIL, PARSE_TAIL.replace(old, new, 1))]
 
 
+# The same duplication problem in the HTTP layer: four handlers open with the
+# identical POST guard and three decode their body the identical way. The
+# function signature is the only unique text at the top, and the
+# `extractIncremental` call is the only unique text at the bottom.
+
+HANDLER_HEAD = '''func handleAPIAnalyzeIncremental(w http.ResponseWriter, r *http.Request) {
+\tif r.Method != http.MethodPost {
+\t\thttp.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+\t\treturn
+\t}
+
+\tvar req struct {
+\t\tNewText     string      `json:"new_text"`
+\t\tContextText string      `json:"context_text"`
+\t\tExisting    []Statement `json:"existing"`
+\t\tMsgOffset   int         `json:"msg_offset"`
+\t\tFullReview  bool        `json:"full_review"`
+\t}
+
+\tct := r.Header.Get("Content-Type")
+\tif strings.Contains(ct, "application/json") {
+\t\tif err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+\t\t\tjsonError(w, "invalid JSON", 400)
+\t\t\treturn
+\t\t}
+'''
+
+HANDLER_TAIL = '''\tresult, err := extractIncremental(req.NewText, req.ContextText, req.Existing, req.MsgOffset, req.FullReview)
+\tif err != nil {
+\t\tjsonError(w, err.Error(), 500)
+\t\treturn
+\t}
+
+\tw.Header().Set("Content-Type", "application/json")
+\tjson.NewEncoder(w).Encode(result)
+'''
+
+
+def in_handler_head(old, new):
+    assert old in HANDLER_HEAD, old
+    return [(HANDLER_HEAD, HANDLER_HEAD.replace(old, new, 1))]
+
+
+def in_handler_tail(old, new):
+    assert old in HANDLER_TAIL, old
+    return [(HANDLER_TAIL, HANDLER_TAIL.replace(old, new, 1))]
+
+
 CASES = [
     # ---- numberTranscriptLinesOffset: the numbering the prompt depends on ----
     Case(
@@ -278,10 +326,14 @@ CASES = [
         [("NEW PORTION to analyze (each line is pre-numbered: [N] (speaker_id) Name: text):\n` + newText + `",
           "NEW PORTION to analyze (each line is pre-numbered: [N] (speaker_id) Name: text):\n` + \"\" + `")],
     ),
+    # ⚠️ Replacing `existingSummary` with `""` here orphans the variable and
+    # scores `compile error`. Summarising an empty list instead keeps every
+    # name live — `existing` is a parameter, and Go permits an unused one — and
+    # is the more realistic defect anyway (225th).
     Case(
-        "the existing analysis is left out, so the model re-extracts claims it already has",
-        [("EXISTING ANALYSIS (for context — do NOT repeat these):\n` + existingSummary + contextSection + `",
-          "EXISTING ANALYSIS (for context — do NOT repeat these):\n` + \"\" + contextSection + `")],
+        "the existing analysis is summarised as empty, so the model re-extracts claims it has",
+        [("\texistingSummary := summarizeStatements(existing, 0)",
+          "\texistingSummary := summarizeStatements(nil, 0)")],
     ),
     Case(
         "the context section is emitted even when there is no context",
@@ -395,8 +447,31 @@ CASES = [
     # ---- handleAPIAnalyzeIncremental ----
     Case(
         "the method guard admits GET, so a crawler can spend money on this endpoint",
-        [("\tif r.Method != http.MethodPost {\n\t\thttp.Error(w, `{\"error\":\"method not allowed\"}`, http.StatusMethodNotAllowed)",
-          "\tif r.Method == \"NEVER\" {\n\t\thttp.Error(w, `{\"error\":\"method not allowed\"}`, http.StatusMethodNotAllowed)")],
+        in_handler_head("\tif r.Method != http.MethodPost {", '\tif r.Method == "NEVER" {'),
+    ),
+    Case(
+        "a non-POST is refused with the wrong status",
+        in_handler_head("http.StatusMethodNotAllowed)", "http.StatusBadRequest)"),
+    ),
+    Case(
+        "msg_offset is read from a different JSON key",
+        in_handler_head('MsgOffset   int         `json:"msg_offset"`',
+                        'MsgOffset   int         `json:"offset"`'),
+        expected_unnoticed=(
+            "defect ba0eb70b: MsgOffset is forwarded to extractIncremental and then never read, "
+            "so no wire key for it can change an observable outcome. This case exists to record "
+            "that the dead parameter reaches all the way out to the HTTP contract"
+        ),
+    ),
+    Case(
+        "full_review is read from a different JSON key, so the client can never turn review on",
+        in_handler_head('FullReview  bool        `json:"full_review"`',
+                        'FullReview  bool        `json:"review"`'),
+    ),
+    Case(
+        "context_text is read from a different JSON key",
+        in_handler_head('ContextText string      `json:"context_text"`',
+                        'ContextText string      `json:"context"`'),
     ),
     Case(
         "an empty new_text is accepted, so a blank request is billed upstream",
@@ -410,29 +485,37 @@ CASES = [
     ),
     Case(
         "a JSON decode failure is ignored, so a truncated body is analysed as an empty request",
-        [('\t\tif err := json.NewDecoder(r.Body).Decode(&req); err != nil {\n\t\t\tjsonError(w, "invalid JSON", 400)\n\t\t\treturn\n\t\t}',
-          '\t\tjson.NewDecoder(r.Body).Decode(&req)')],
+        in_handler_head(
+            '\t\tif err := json.NewDecoder(r.Body).Decode(&req); err != nil {\n'
+            '\t\t\tjsonError(w, "invalid JSON", 400)\n\t\t\treturn\n\t\t}\n',
+            "\t\tjson.NewDecoder(r.Body).Decode(&req)\n"),
     ),
     Case(
         "an extraction error becomes a 200 with an empty body instead of a 500",
-        [("\tresult, err := extractIncremental(req.NewText, req.ContextText, req.Existing, req.MsgOffset, req.FullReview)\n\tif err != nil {",
-          "\tresult, err := extractIncremental(req.NewText, req.ContextText, req.Existing, req.MsgOffset, req.FullReview)\n\tif err == nil && false {")],
+        in_handler_tail("\tif err != nil {", "\tif err == nil && false {"),
     ),
     Case(
         "the extraction error is swallowed and its text never reaches the client",
-        [("\t\tjsonError(w, err.Error(), 500)", '\t\tjsonError(w, "", 500)')],
+        in_handler_tail("jsonError(w, err.Error(), 500)", 'jsonError(w, "", 500)'),
+    ),
+    Case(
+        "an extraction error is reported as a 400, blaming the client for an upstream outage",
+        in_handler_tail("jsonError(w, err.Error(), 500)", "jsonError(w, err.Error(), 400)"),
     ),
     Case(
         "full_review is never forwarded, so review mode is unreachable over HTTP",
-        [("req.Existing, req.MsgOffset, req.FullReview)", "req.Existing, req.MsgOffset, false)")],
+        in_handler_tail("req.Existing, req.MsgOffset, req.FullReview)",
+                        "req.Existing, req.MsgOffset, false)"),
     ),
     Case(
         "context_text is never forwarded, so the model loses the conversation flow",
-        [("extractIncremental(req.NewText, req.ContextText,", 'extractIncremental(req.NewText, "",')],
+        in_handler_tail("extractIncremental(req.NewText, req.ContextText,",
+                        'extractIncremental(req.NewText, "",'),
     ),
     Case(
         "the existing analysis is never forwarded, so every chunk re-extracts the whole conversation",
-        [("req.ContextText, req.Existing, req.MsgOffset", "req.ContextText, nil, req.MsgOffset")],
+        in_handler_tail("req.ContextText, req.Existing, req.MsgOffset",
+                        "req.ContextText, nil, req.MsgOffset"),
     ),
     Case(
         "the multipart branch stops reading `existing`",
@@ -450,13 +533,11 @@ CASES = [
     ),
     Case(
         "the JSON branch is chosen for every content type, so multipart bodies fail to decode",
-        [('\tif strings.Contains(ct, "application/json") {',
-          "\tif true {")],
+        in_handler_head('\tif strings.Contains(ct, "application/json") {', "\tif true {"),
     ),
     Case(
         "the response content type is dropped",
-        [('\tw.Header().Set("Content-Type", "application/json")\n\tjson.NewEncoder(w).Encode(result)',
-          "\tjson.NewEncoder(w).Encode(result)")],
+        in_handler_tail('\tw.Header().Set("Content-Type", "application/json")\n', ""),
     ),
 
     # ---- controls ----
