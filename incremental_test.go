@@ -704,7 +704,7 @@ func TestExtractIncrementalRejectsAReplyThatIsNeitherObjectNorArray(t *testing.T
 
 // --- ⛔ the two defects, pinned as characterisations -------------------------
 
-// DEFECT 1 — noteboard card 1d4b1f9c.
+// DEFECT 1 — noteboard card 7fdc428e.
 //
 // The reply `{"statements": []}` is EXACTLY what this function's own prompt
 // asks for: `- Empty "statements" array if no new claims`. And outside review
@@ -729,7 +729,7 @@ func TestExtractIncrementalEmptyStatementsObjectIsRejected_DEFECT(t *testing.T) 
 
 	got, err := extractIncremental("[1] (speaker_1) A: nothing new here", "", nil, 0, false)
 	if err == nil {
-		t.Fatalf("DEFECT 1 (noteboard 1d4b1f9c) appears FIXED — "+
+		t.Fatalf("DEFECT 1 (noteboard 7fdc428e) appears FIXED — "+
 			"`{\"statements\": []}` now succeeds with %+v. "+
 			"Change this test to assert a zero-statement success and close the card.", got)
 	}
@@ -749,7 +749,7 @@ func TestExtractIncrementalEmptyStatementsObjectIsRejected_DEFECT(t *testing.T) 
 	}
 }
 
-// DEFECT 2 — noteboard card 1d4b1f9c, second half. Same missing parentheses,
+// DEFECT 2 — noteboard card 7fdc428e, second half. Same missing parentheses,
 // opposite direction.
 //
 // Because `objResult.Updates != nil` is its own disjunct, it is read even when
@@ -766,7 +766,7 @@ func TestExtractIncrementalMalformedStatementsAreSilentlyDropped_DEFECT(t *testi
 
 	got, err := extractIncremental("[1] (speaker_1) A: hi", "", nil, 0, true)
 	if err != nil {
-		t.Fatalf("DEFECT 2 (noteboard 1d4b1f9c) appears FIXED — the malformed "+
+		t.Fatalf("DEFECT 2 (noteboard 7fdc428e) appears FIXED — the malformed "+
 			"statements field is now an error (%v). Change this test to expect "+
 			"that error and close the card.", err)
 	}
@@ -779,7 +779,7 @@ func TestExtractIncrementalMalformedStatementsAreSilentlyDropped_DEFECT(t *testi
 	t.Log("pinned: a malformed `statements` field returns nil error and zero statements")
 }
 
-// DEFECT 3 — noteboard card ba0eb70b. `msgOffset` is accepted by the endpoint
+// DEFECT 3 — noteboard card 7a0c4490. `msgOffset` is accepted by the endpoint
 // as `msg_offset`, threaded through handleAPIAnalyzeIncremental, and then never
 // read by extractIncremental. Its sibling `numberTranscriptLinesOffset` — the
 // only thing that could apply it — has no caller that passes anything but 0.
@@ -796,7 +796,7 @@ func TestExtractIncrementalIgnoresMsgOffset_DEFECT(t *testing.T) {
 		return fake.gotBody
 	}
 	if !bytes.Equal(send(0), send(500)) {
-		t.Fatalf("DEFECT 3 (noteboard ba0eb70b) appears FIXED — msgOffset now " +
+		t.Fatalf("DEFECT 3 (noteboard 7a0c4490) appears FIXED — msgOffset now " +
 			"changes the request. Assert what it does and close the card.")
 	}
 	t.Log("pinned: msgOffset does not affect the request in any way")

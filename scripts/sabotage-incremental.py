@@ -43,7 +43,7 @@ nobody runs.
 📄 **What the tests found that the coverage row did not** — three defects, all
 filed rather than fixed, because each repair is a wire-contract decision:
 
-  - `1d4b1f9c` (both halves): the parse branch is written
+  - `7fdc428e` (both halves): the parse branch is written
     `err == nil && len(Statements) > 0 || Updates != nil`, and Go groups that as
     `(err == nil && len > 0) || (Updates != nil)`. Missing parentheses, failing
     in both directions. **Forwards:** `{"statements": []}` — exactly what this
@@ -55,7 +55,7 @@ filed rather than fixed, because each repair is a wire-contract decision:
     FAILED, and Go's decoder fills fields as it walks — so
     `{"updates":[...], "statements":"not-an-array"}` returns **nil error, 200,
     zero statements**. A whole turn of conversation vanishes silently.
-  - `ba0eb70b`: `msgOffset` is accepted by the endpoint as `msg_offset`,
+  - `7a0c4490`: `msgOffset` is accepted by the endpoint as `msg_offset`,
     threaded through the handler, and never read. Its only possible consumer,
     `numberTranscriptLinesOffset`, has no caller passing anything but 0.
 
@@ -429,12 +429,12 @@ CASES = [
     # fixed the pinning tests fail loudly and name the card. A scorer that let
     # these pass would mean the characterisation is not actually asserted.
     Case(
-        "the missing parentheses are added, so an empty statements object parses (defect 1d4b1f9c is FIXED)",
+        "the missing parentheses are added, so an empty statements object parses (defect 7fdc428e is FIXED)",
         [("\tif err := json.Unmarshal([]byte(text), &objResult); err == nil && len(objResult.Statements) > 0 || objResult.Updates != nil {",
           "\tif err := json.Unmarshal([]byte(text), &objResult); err == nil && (len(objResult.Statements) > 0 || objResult.Updates != nil) {")],
     ),
     Case(
-        "the object branch is taken whenever the unmarshal succeeded, widening defect 1d4b1f9c's forward half",
+        "the object branch is taken whenever the unmarshal succeeded, widening defect 7fdc428e's forward half",
         [("\tif err := json.Unmarshal([]byte(text), &objResult); err == nil && len(objResult.Statements) > 0 || objResult.Updates != nil {",
           "\tif err := json.Unmarshal([]byte(text), &objResult); err == nil {")],
     ),
@@ -453,7 +453,7 @@ CASES = [
         in_handler_head('MsgOffset   int         `json:"msg_offset"`',
                         'MsgOffset   int         `json:"offset"`'),
         expected_unnoticed=(
-            "defect ba0eb70b: MsgOffset is forwarded to extractIncremental and then never read, "
+            "defect 7a0c4490: MsgOffset is forwarded to extractIncremental and then never read, "
             "so no wire key for it can change an observable outcome. This case exists to record "
             "that the dead parameter reaches all the way out to the HTTP contract"
         ),
@@ -569,7 +569,7 @@ CASES = [
         [("\texistingSummary := summarizeStatements(existing, 0)",
           "\texistingSummary := summarizeStatements(existing, 0)\n\t_ = numberTranscriptLinesOffset(newText, msgOffset)")],
         expected_unnoticed=(
-            "defect ba0eb70b: msgOffset is dead, so computing a value and discarding it changes "
+            "defect 7a0c4490: msgOffset is dead, so computing a value and discarding it changes "
             "nothing observable. TestExtractIncrementalIgnoresMsgOffset_DEFECT pins that the "
             "REQUEST is unaffected, which this edit also leaves true. Fixing the defect properly "
             "means feeding the result into the prompt, and that case would be caught"
