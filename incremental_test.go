@@ -108,6 +108,14 @@ func (f *fakeAnthropic) sentPrompt(t *testing.T) string {
 	if len(req.Messages) != 1 {
 		t.Fatalf("expected exactly 1 message, got %d", len(req.Messages))
 	}
+	// The role is asserted here rather than in one test, because every caller
+	// of sentPrompt depends on it: a prompt sent as an assistant turn is the
+	// model being told it already said this, and the reply is then a
+	// continuation rather than an analysis. The scorer found this gap — the
+	// suite read Content and never looked at Role.
+	if req.Messages[0].Role != "user" {
+		t.Errorf("prompt was sent as role %q, want \"user\"", req.Messages[0].Role)
+	}
 	return req.Messages[0].Content
 }
 
