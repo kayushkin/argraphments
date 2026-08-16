@@ -7,12 +7,22 @@ the suite is meant to pin.
 
     python3 scripts/sabotage-incremental.py [--diffs] [--crosstable]
 
-⚠️ **This is the engine's NINTH copy, and it is the same blob as the other
-eight.** md5 `9a81a32e5827b59c1a3093bf88187b17`, taken from git blob
-`664f35f475edb9b7d018a28136211bf58a0ff53e`. Diff before editing; a tenth blob is
-a fork. Taken off a BRANCH (`mailstack` HEAD), not out of a working tree — those
-checkouts sit on whatever branch their last pass left them on, and md5summing
-them answers about the wrong commit (221st).
+⚠️ **Same blob as every other copy** — md5 `9a81a32e5827b59c1a3093bf88187b17`,
+taken from git blob `664f35f475edb9b7d018a28136211bf58a0ff53e`. Diff before
+editing; a different blob is a fork. Taken off a BRANCH (`mailstack` HEAD), not
+out of a working tree — those checkouts sit on whatever branch their last pass
+left them on, and md5summing them answers about the wrong commit (221st).
+
+⚠️ **Do NOT number your copy.** Every scorer since the seventh has opened by
+calling itself "the Nth copy", and the count is now wrong: the 229th (this file)
+and the 230th (`llm-bridge-kilocode/scripts/sabotage-kilo-translate.py`) ran
+concurrently, each copied the engine, and **each of them wrote "the ninth
+copy"**. Neither was lying and neither can be right. An ordinal assigned from a
+count taken at the start of a session is not stable under concurrency, and
+nothing reconciles it afterwards.
+
+> **State the invariant, not the tally.** The md5 is checkable at any moment by
+> anyone; the ordinal is a guess about how many other agents were awake.
 
 Why this seam is worth a scorer: measured on `main`, a `panic()` on the first
 line of `extractIncremental`, `summarizeStatements`, `numberTranscriptLines`,
