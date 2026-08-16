@@ -75,6 +75,81 @@ from sabotage import REPO, Case, score  # noqa: E402
 TARGETS = [REPO / "main.go"]
 PACKAGES = ["."]
 
+# ⚠️ **main.go holds THREE model-callers whose request/response boilerplate is
+# byte-identical** — `extractStructure`, `extractIncremental` and
+# `diarizeTranscript` each carry the same twelve lines of `json.Marshal` +
+# `http.NewRequest` + header sets + status check, copy-pasted. So every obvious
+# needle in that region (`"model": ...`, the endpoint URL, `if resp.StatusCode
+# != 200 {`, the fence-stripping lines) appears 3 or 4 times, and the engine's
+# occurrence guard refuses all of them. It is right to: sabotaging the first
+# occurrence would score `extractStructure` while the row read as a verdict on
+# `extractIncremental`.
+#
+# The 226th met the mild version of this ("an HTTP status write is among the
+# worst needles available — anchor on the line above it"). Here the line above
+# is duplicated too, and so is the line above that. The ONLY unique text in
+# extractIncremental's tail is its own prompt, so the two blocks below start at
+# the prompt's closing line and at the `"empty response"` message that differs
+# from extractStructure's `"empty response from Claude"`. Cases edit a copy of
+# the block rather than a bare line.
+#
+# > **When a file holds several copy-pasted callers, the anchor is not the line
+# > above — it is the nearest text that is about YOUR caller and no other. Work
+# > outward from the payload, not upward from the target.**
+
+REQUEST_AND_STATUS = '''Return ONLY valid JSON object, no markdown fences.`
+
+\treqBody, _ := json.Marshal(map[string]any{
+\t\t"model":      "claude-sonnet-4-20250514",
+\t\t"max_tokens": 4096,
+\t\t"messages": []map[string]string{
+\t\t\t{"role": "user", "content": prompt},
+\t\t},
+\t})
+
+\treq, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(reqBody))
+\tif err != nil {
+\t\treturn nil, err
+\t}
+\treq.Header.Set("x-api-key", anthropicKey)
+\treq.Header.Set("content-type", "application/json")
+\treq.Header.Set("anthropic-version", "2023-06-01")
+
+\tresp, err := http.DefaultClient.Do(req)
+\tif err != nil {
+\t\treturn nil, err
+\t}
+\tdefer resp.Body.Close()
+
+\tbody, _ := io.ReadAll(resp.Body)
+\tif resp.StatusCode != 200 {
+\t\treturn nil, fmt.Errorf("claude API %d: %s", resp.StatusCode, string(body))
+\t}
+'''
+
+PARSE_TAIL = '''\t\treturn nil, fmt.Errorf("empty response")
+\t}
+
+\ttext := strings.TrimSpace(result.Content[0].Text)
+\ttext = strings.TrimPrefix(text, "```json")
+\ttext = strings.TrimPrefix(text, "```")
+\ttext = strings.TrimSuffix(text, "```")
+\ttext = strings.TrimSpace(text)
+'''
+
+
+def in_request(old, new):
+    """One edit inside extractIncremental's copy of the shared request block."""
+    assert old in REQUEST_AND_STATUS, old
+    return [(REQUEST_AND_STATUS, REQUEST_AND_STATUS.replace(old, new, 1))]
+
+
+def in_parse(old, new):
+    """One edit inside extractIncremental's copy of the shared parse tail."""
+    assert old in PARSE_TAIL, old
+    return [(PARSE_TAIL, PARSE_TAIL.replace(old, new, 1))]
+
+
 CASES = [
     # ---- numberTranscriptLinesOffset: the numbering the prompt depends on ----
     Case(
@@ -99,10 +174,23 @@ CASES = [
         [("\t\tline = strings.TrimSpace(line)\n\t\tif line ==",
           "\t\tline = line\n\t\tif line ==")],
     ),
+    # ⚠️ Scored UNNOTICED on the first run, and the tests are not at fault —
+    # this guard is unconditionally redundant. Every line is trimmed
+    # individually two lines later and blank lines are skipped, so the outer
+    # TrimSpace can only ever remove whitespace that the inner pass removes
+    # again. Verified by enumeration rather than argued: there is no input for
+    # which the two forms differ. Unlike the 228th's `filePath == ""` — which
+    # was redundant under the DEFAULT patterns and load-bearing under `["*"]` —
+    # this one has no configuration that makes it matter, so it is declared
+    # rather than closed.
     Case(
-        "the transcript is split without being trimmed, so a leading newline becomes line [1]",
+        "the transcript is split without being trimmed first",
         [('\tlines := strings.Split(strings.TrimSpace(transcript), "\\n")',
           '\tlines := strings.Split(transcript, "\\n")')],
+        expected_unnoticed=(
+            "unconditionally redundant: each line is TrimSpace'd individually and empty lines "
+            "are skipped, so no input distinguishes the two forms. Not a coverage gap"
+        ),
     ),
     Case(
         "the line label loses its brackets, so the model cannot find the [N] it is told to echo",
@@ -150,9 +238,13 @@ CASES = [
     ),
 
     # ---- countDescendants ----
+    # ⚠️ The obvious edit here — `count += 0` — orphans `c` and scores
+    # `compile error` instead of a verdict. The 225th's rule: prefer a drift
+    # that keeps every variable live. Counting one more level instead of
+    # recursing keeps `c` referenced AND is a more realistic defect.
     Case(
-        "only direct children are counted, so a deep subtree reports its top row",
-        [("\t\tcount += countDescendants(c)", "\t\tcount += 0")],
+        "the walk stops one level down, so a deep subtree is undercounted",
+        [("\t\tcount += countDescendants(c)", "\t\tcount += len(c.Children)")],
     ),
     Case(
         "the direct children are counted twice",
@@ -162,12 +254,24 @@ CASES = [
     # ---- extractIncremental: the request ----
     Case(
         "the request goes to the completions endpoint instead of messages",
-        [('"POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(reqBody)',
-          '"POST", "https://api.anthropic.com/v1/complete", bytes.NewReader(reqBody)')],
-        # Only ONE of the three call sites is inside extractIncremental; the
-        # engine's occurrence guard would refuse a bare URL needle, so the
-        # reqBody argument anchors it. extractStructure uses `reqBody` too, so
-        # this needle is checked to appear exactly once at scoring time.
+        in_request("https://api.anthropic.com/v1/messages",
+                   "https://api.anthropic.com/v1/complete"),
+    ),
+    Case(
+        "the API key header is never set, so every call is unauthenticated",
+        in_request('\treq.Header.Set("x-api-key", anthropicKey)\n', ""),
+    ),
+    Case(
+        "the anthropic-version header is dropped",
+        in_request('\treq.Header.Set("anthropic-version", "2023-06-01")\n', ""),
+    ),
+    Case(
+        "max_tokens is cut to a length that truncates any real reply",
+        in_request('"max_tokens": 4096,', '"max_tokens": 64,'),
+    ),
+    Case(
+        "the prompt is sent as an assistant turn instead of a user turn",
+        in_request('{"role": "user", "content": prompt},', '{"role": "assistant", "content": prompt},'),
     ),
     Case(
         "the new text is left out of the prompt, so the model analyses nothing",
@@ -217,13 +321,25 @@ CASES = [
     # ---- extractIncremental: parsing ----
     Case(
         "the ```json fence is no longer stripped, so a fenced reply fails to parse",
-        [('\ttext = strings.TrimPrefix(text, "```json")',
-          '\ttext = strings.TrimPrefix(text, "~~~json")')],
+        in_parse('strings.TrimPrefix(text, "```json")', 'strings.TrimPrefix(text, "~~~json")'),
+    ),
+    Case(
+        "the bare ``` fence is no longer stripped",
+        in_parse('\ttext = strings.TrimPrefix(text, "```")\n', ""),
     ),
     Case(
         "the trailing fence is left on the end of the reply",
-        [('\ttext = strings.TrimSuffix(text, "```")',
-          '\ttext = strings.TrimSuffix(text, "~~~")')],
+        in_parse('strings.TrimSuffix(text, "```")', 'strings.TrimSuffix(text, "~~~")'),
+    ),
+    Case(
+        "the reply is not trimmed before parsing, so a leading newline breaks it",
+        in_parse("\ttext := strings.TrimSpace(result.Content[0].Text)",
+                 "\ttext := result.Content[0].Text"),
+        expected_unnoticed=(
+            "the final `text = strings.TrimSpace(text)` two lines down trims whatever the first "
+            "call would have, and encoding/json ignores leading whitespace anyway, so this edit "
+            "cannot change an outcome the suite can observe — genuinely redundant, not untested"
+        ),
     ),
     Case(
         "statement types are no longer lowercased, so CLAIM and claim become different kinds",
@@ -242,17 +358,22 @@ CASES = [
     ),
     Case(
         "a non-200 upstream is treated as success, so an outage returns zero new claims",
-        [("\tif resp.StatusCode != 200 {", "\tif resp.StatusCode == -1 {")],
+        in_request("\tif resp.StatusCode != 200 {", "\tif resp.StatusCode == -1 {"),
     ),
     Case(
         "the upstream status is dropped from the error, leaving no way to tell 429 from 500",
-        [('\t\treturn nil, fmt.Errorf("claude API %d: %s", resp.StatusCode, string(body))',
-          '\t\treturn nil, fmt.Errorf("claude API error: %s", string(body))')],
+        in_request('fmt.Errorf("claude API %d: %s", resp.StatusCode, string(body))',
+                   'fmt.Errorf("claude API error: %s", string(body))'),
     ),
     Case(
-        "an empty content array is dereferenced instead of refused",
-        [('\tif len(result.Content) == 0 {\n\t\treturn nil, fmt.Errorf("empty response")\n\t}\n\n\ttext := strings.TrimSpace(result.Content[0].Text)',
-          '\tif len(result.Content) < 0 {\n\t\treturn nil, fmt.Errorf("empty response")\n\t}\n\n\ttext := ""\n\t_ = result')],
+        "the upstream body is dropped from the error, so the reason never reaches the client",
+        in_request('fmt.Errorf("claude API %d: %s", resp.StatusCode, string(body))',
+                   'fmt.Errorf("claude API %d", resp.StatusCode)'),
+    ),
+    Case(
+        "an empty content array is no longer refused",
+        in_parse('\t\treturn nil, fmt.Errorf("empty response")\n\t}\n',
+                 '\t\treturn nil, fmt.Errorf("")\n\t}\n'),
     ),
 
     # ---- the defect characterisations ----
@@ -364,7 +485,8 @@ CASES = [
     # ---- declared, with reasons ----
     Case(
         "the model name changes to another Sonnet build",
-        [('"model":      "claude-sonnet-4-20250514",', '"model":      "claude-sonnet-4-5-20250929",')],
+        in_request('"model":      "claude-sonnet-4-20250514",',
+                   '"model":      "claude-sonnet-4-5-20250929",'),
         expected_unnoticed=(
             "TestExtractIncrementalPostsToAnthropicWithTheExpectedHeaders pins the exact model "
             "string, so this IS caught — listed here only because a model bump is a legitimate "
