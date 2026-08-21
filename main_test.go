@@ -386,7 +386,16 @@ func TestE2E_UniqueSlugs(t *testing.T) {
 		mux.ServeHTTP(w, req)
 		var s map[string]any
 		json.Unmarshal(w.Body.Bytes(), &s)
-		slug := s["slug"].(string)
+		// Not a type assertion: when transcripts.slug's UNIQUE index refuses the
+		// row, the handler answers with no slug at all, and `s["slug"].(string)`
+		// panics on a nil interface before the duplicate check below can run —
+		// so this test's own "duplicate slug" message was unreachable.
+		slug, ok := s["slug"].(string)
+		if !ok {
+			t.Fatalf("create %d of 20 returned no slug (status %d, body %s) — "+
+				"the INSERT was refused, most likely by transcripts.slug's UNIQUE index",
+				i+1, w.Code, w.Body.String())
+		}
 		if seen[slug] {
 			t.Fatalf("duplicate slug after %d creates: %s", i, slug)
 		}
