@@ -885,12 +885,28 @@ Return ONLY valid JSON object, no markdown fences.`
 	text = strings.TrimSuffix(text, "```")
 	text = strings.TrimSpace(text)
 
-	// Try parsing as JSON object {statements, updates} first
+	// Try parsing as JSON object {statements, updates} first.
+	//
+	// The parentheses are load-bearing. Go binds && tighter than ||, so without
+	// them this reads `(err == nil && len(...) > 0) || (Updates != nil)` — and
+	// the second disjunct is then read even when the unmarshal FAILED. Go's
+	// decoder fills fields as it walks, so a reply whose `updates` parses and
+	// whose `statements` does not left Updates non-nil with err non-nil, the
+	// branch was taken anyway, the unmarshal error was discarded, and a whole
+	// turn of conversation was dropped behind an HTTP 200. Noteboard card
+	// 7fdc428e; pinned by TestExtractIncrementalMalformedStatementsAreAnError.
+	//
+	// ⚠️ This does NOT change what `{"statements": []}` does — a reply with no
+	// statements and no updates key still falls through to the bare-array
+	// fallback and is reported as a parse error, i.e. HTTP 500. That is the
+	// forwards half of the same card and it is a deliberate open question
+	// about the wire format, not an oversight. It is pinned as it stands by
+	// TestExtractIncrementalEmptyStatementsObjectIsRejected_DEFECT.
 	var objResult struct {
 		Statements []json.RawMessage `json:"statements"`
 		Updates    []StatementUpdate `json:"updates"`
 	}
-	if err := json.Unmarshal([]byte(text), &objResult); err == nil && len(objResult.Statements) > 0 || objResult.Updates != nil {
+	if err := json.Unmarshal([]byte(text), &objResult); err == nil && (len(objResult.Statements) > 0 || objResult.Updates != nil) {
 		var statements []Statement
 		for _, r := range objResult.Statements {
 			var s Statement
