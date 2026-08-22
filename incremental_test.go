@@ -704,25 +704,35 @@ func TestExtractIncrementalRejectsAReplyThatIsNeitherObjectNorArray(t *testing.T
 
 // --- ⛔ the two defects, pinned as characterisations -------------------------
 
-// DEFECT 1 — noteboard card 7fdc428e.
+// DEFECT 1 — noteboard card 7fdc428e, FORWARDS half. Still open, on purpose.
 //
 // The reply `{"statements": []}` is EXACTLY what this function's own prompt
 // asks for: `- Empty "statements" array if no new claims`. And outside review
 // mode the prompt never mentions "updates" at all, so a compliant model omits
-// it. The branch condition is
+// it. The branch condition is now
 //
-//	if err := json.Unmarshal(...); err == nil && len(objResult.Statements) > 0 || objResult.Updates != nil {
+//	if err := json.Unmarshal(...); err == nil && (len(objResult.Statements) > 0 || objResult.Updates != nil) {
 //
-// which Go groups as `(err == nil && len > 0) || (Updates != nil)`. With zero
-// statements and no updates key BOTH disjuncts are false, so control falls
-// through to the bare-array fallback, which cannot parse an object — and the
-// caller answers HTTP 500.
+// With zero statements and no updates key the inner disjunction is false, so
+// control still falls through to the bare-array fallback, which cannot parse
+// an object — and the caller still answers HTTP 500.
 //
 // So the single commonest outcome of incremental analysis — a new chunk with
-// nothing new in it — is reported to the client as a server error.
+// nothing new in it — is still reported to the client as a server error.
 //
-// This test pins the CURRENT behaviour. When the defect is fixed it will fail;
-// that is the signal to change it to expect a zero-statement success.
+// ⚠️ The parenthesization that fixed DEFECT 2 deliberately did NOT move this.
+// The card's own repair list calls the forwards half a change to what the
+// endpoint puts on the wire and reserves it for the user, and this test is
+// what proves an unattended repair did not quietly take that decision: any
+// change that makes `{"statements": []}` succeed reddens it.
+//
+// ⛔ The card describes its repair 1 ("add the parentheses") as fixing BOTH
+// halves. Measured here, it does not — it fixes DEFECT 2 alone, and this test
+// stayed green across it. The card has been corrected.
+//
+// This test pins the CURRENT behaviour. When the forwards half is decided it
+// will fail; that is the signal to change it to expect a zero-statement
+// success.
 func TestExtractIncrementalEmptyStatementsObjectIsRejected_DEFECT(t *testing.T) {
 	fake := &fakeAnthropic{replyText: `{"statements": []}`}
 	installFakeAnthropic(t, fake)
@@ -749,34 +759,61 @@ func TestExtractIncrementalEmptyStatementsObjectIsRejected_DEFECT(t *testing.T) 
 	}
 }
 
-// DEFECT 2 — noteboard card 7fdc428e, second half. Same missing parentheses,
-// opposite direction.
+// noteboard card 7fdc428e, BACKWARDS half — was DEFECT 2, now repaired and
+// asserted rather than characterised.
 //
-// Because `objResult.Updates != nil` is its own disjunct, it is read even when
-// the unmarshal FAILED. Go's decoder fills fields as it walks, so a reply whose
-// `updates` parses and whose `statements` does not leaves Updates non-nil with
-// err non-nil — and the branch is taken anyway. The unmarshal error is
-// discarded, the malformed statements are silently dropped, and the caller gets
-// HTTP 200 with an empty statements array.
+// Before the parenthesization, `objResult.Updates != nil` was its own disjunct
+// and so was read even when the unmarshal FAILED. Go's decoder fills fields as
+// it walks, so a reply whose `updates` parses and whose `statements` does not
+// left Updates non-nil with err non-nil — and the branch was taken anyway. The
+// unmarshal error was discarded, the malformed statements were silently
+// dropped, and the caller got HTTP 200 with an empty statements array. A whole
+// turn of conversation disappeared and nothing anywhere said so.
 //
-// A whole turn of conversation disappears and nothing anywhere says so.
-func TestExtractIncrementalMalformedStatementsAreSilentlyDropped_DEFECT(t *testing.T) {
+// ⚠️ Asserting the returned error alone would be too weak to grade the repair
+// against the shape of mutation that actually threatens it. The control arm
+// that keeps the object branch and merely widens it back re-produces the
+// SILENT-SUCCESS path, and "returns an error" is the only thing that separates
+// the two — so the assertion here is on the error AND on the fact that the
+// updates that used to survive no longer come back as a successful result.
+// Nothing may be reported as extracted from a reply that did not parse.
+func TestExtractIncrementalMalformedStatementsAreAnError(t *testing.T) {
 	fake := &fakeAnthropic{replyText: `{"updates": [{"msg_index": 3}], "statements": "not-an-array"}`}
 	installFakeAnthropic(t, fake)
 
 	got, err := extractIncremental("[1] (speaker_1) A: hi", "", nil, 0, true)
-	if err != nil {
-		t.Fatalf("DEFECT 2 (noteboard 7fdc428e) appears FIXED — the malformed "+
-			"statements field is now an error (%v). Change this test to expect "+
-			"that error and close the card.", err)
+	if err == nil {
+		t.Fatalf("a reply whose `statements` field is not an array must be an "+
+			"error, not a silent success — got %+v (noteboard 7fdc428e)", got)
 	}
-	if len(got.Statements) != 0 {
-		t.Fatalf("expected the malformed statements to have been dropped, got %d", len(got.Statements))
+	if got != nil {
+		t.Errorf("nothing may be returned alongside the error, got %+v", got)
+	}
+	// The error has to reach handleAPIAnalyzeIncremental, which turns any
+	// non-nil error into HTTP 500. The fallback's wording is what it carries.
+	if !strings.Contains(err.Error(), "parse error") {
+		t.Errorf("expected the fallback's parse error, got %v", err)
+	}
+}
+
+// The repair must not have made EVERY object reply an error: a well-formed
+// object whose `updates` parses still succeeds, and the updates still survive.
+// Without this, deleting the whole object branch would score as a caught
+// mutation by the test above alone.
+func TestExtractIncrementalWellFormedUpdatesStillSurvive(t *testing.T) {
+	fake := &fakeAnthropic{replyText: `{"updates": [{"msg_index": 3}], "statements": []}`}
+	installFakeAnthropic(t, fake)
+
+	got, err := extractIncremental("[1] (speaker_1) A: hi", "", nil, 0, true)
+	if err != nil {
+		t.Fatalf("a well-formed object reply must still succeed, got %v", err)
 	}
 	if len(got.Updates) != 1 || got.Updates[0].MsgIndex != 3 {
-		t.Errorf("the updates half parsed and should survive, got %+v", got.Updates)
+		t.Errorf("the updates should survive, got %+v", got.Updates)
 	}
-	t.Log("pinned: a malformed `statements` field returns nil error and zero statements")
+	if len(got.Statements) != 0 {
+		t.Errorf("want 0 statements, got %d", len(got.Statements))
+	}
 }
 
 // DEFECT 3 — noteboard card 7a0c4490. `msgOffset` is accepted by the endpoint
