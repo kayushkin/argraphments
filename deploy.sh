@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# One shared gate decides whether this tree may be deployed (main clone, default
+# branch, clean, pushed, not behind, and the same for every tree the build reads).
+# It lives in healthcheck/scripts/deploy-gate.sh. Do not inline or copy it.
+( cd "$(dirname "$0")" && "$HOME/bin/deploy-gate" check )
+
 # Builds argraphments, installs the binary AND the systemd unit, restarts the
 # service, and refuses to report success unless the thing actually answers.
 #
@@ -141,3 +146,6 @@ echo "==> Installing nginx vhost..."
 ./deploy/nginx/install.sh
 
 echo "==> Done."
+
+# Last act: write this deploy to repo-store's ledger, so the next agent sees what is live.
+( cd "$(dirname "$0")" && "$HOME/bin/deploy-gate" record )
