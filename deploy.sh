@@ -44,14 +44,17 @@ unit_field() { grep -E "^$1=" "$REPO_UNIT" | head -1 | cut -d= -f2-; }
 BINARY_PATH="$(unit_field ExecStart)"
 BINARY_NAME="$(basename "$BINARY_PATH")"
 WORK_DIR="$(unit_field WorkingDirectory)"
-ENV_FILE="$(grep -E '^EnvironmentFile=' "$REPO_UNIT" | head -1 | cut -d= -f2-)"
-PORT="$(grep -E '^Environment=PORT=' "$REPO_UNIT" | head -1 | cut -d= -f3)"
+LISTEN_ADDRESS="$(grep -E '^Environment=ARGRAPHMENTS_ADDR=' "$REPO_UNIT" | head -1 | cut -d= -f3)"
+PORT="${LISTEN_ADDRESS##*:}"
+# The auth-store settings are host-local: a root-only drop-in beside the live
+# unit, never this repo. The service reads both model keys from auth-store.
+SECRETS_DROP_IN="$LIVE_UNIT.d/auth-store.conf"
 
 echo "==> Unit declares:"
 echo "    ExecStart         = $BINARY_PATH"
 echo "    WorkingDirectory  = $WORK_DIR"
-echo "    EnvironmentFile   = $ENV_FILE"
-echo "    PORT              = $PORT"
+echo "    ARGRAPHMENTS_ADDR = $LISTEN_ADDRESS"
+echo "    secrets drop-in   = $SECRETS_DROP_IN"
 
 # Preflight the two paths systemd will need. Both were wrong on the live unit for
 # months, and systemd reports either as `result: resources` with no clue which --
@@ -59,8 +62,12 @@ echo "    PORT              = $PORT"
 # anything. This is the check that would have caught the crash loop on day one.
 echo "==> Preflight..."
 [ -d "$WORK_DIR" ]  || { echo "ERROR: WorkingDirectory $WORK_DIR does not exist -- systemd cannot chdir and will crash-loop"; exit 1; }
-[ -f "$ENV_FILE" ]  || { echo "ERROR: EnvironmentFile $ENV_FILE does not exist -- systemd cannot load it and will crash-loop"; exit 1; }
-echo "    WorkingDirectory and EnvironmentFile both exist"
+[ -n "$PORT" ] || { echo "ERROR: the unit sets no Environment=ARGRAPHMENTS_ADDR=host:port, so there is nothing to check after the restart"; exit 1; }
+for variable in ARGRAPHMENTS_AUTH_STORE_URL ARGRAPHMENTS_AUTH_STORE_TOKEN ARGRAPHMENTS_ANTHROPIC_CREDENTIAL_ID ARGRAPHMENTS_OPENAI_CREDENTIAL_ID; do
+  sudo grep -q "^Environment=$variable=." "$SECRETS_DROP_IN" 2>/dev/null \
+    || { echo "ERROR: $SECRETS_DROP_IN does not set $variable -- the service would refuse to start"; exit 1; }
+done
+echo "    WorkingDirectory exists; the drop-in sets all four auth-store settings"
 
 echo "==> Building $BINARY_NAME..."
 go build -o "$BINARY_NAME" .

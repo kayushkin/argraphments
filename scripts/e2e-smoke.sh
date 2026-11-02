@@ -54,7 +54,7 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${E2E_PORT:-19125}"
 BASE="http://127.0.0.1:$PORT"
 
-for bin in go curl jq; do
+for bin in go curl jq python3; do
   if ! command -v "$bin" >/dev/null 2>&1; then
     echo "ERROR: required tool '$bin' not found on PATH" >&2
     exit 2
@@ -86,6 +86,7 @@ cleanup() {
   # log here (not only in fail()) is what covers the abort paths `set -e` takes
   # on its own, e.g. a `curl -fsS` returning non-2xx inside a $(...) assignment.
   local status=$?
+  if [ -n "${AUTH_STORE_PID:-}" ]; then kill "$AUTH_STORE_PID" 2>/dev/null || true; fi
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
@@ -107,10 +108,33 @@ fail() {
   exit 1
 }
 
-# Obvious non-credentials. main() only checks that they are NON-EMPTY; nothing
-# below drives a route that would send them anywhere.
-export ANTHROPIC_API_KEY="e2e-smoke-not-a-real-key"
-export OPENAI_API_KEY="e2e-smoke-not-a-real-key"
+# main() reads both model keys from auth-store at start and refuses to run
+# without them. A fake auth-store on a free loopback port hands out obvious
+# non-keys for two made-up credential ids; nothing below drives a route that
+# would send them anywhere.
+AUTH_STORE_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
+cat >"$TMP_DIR/fake_auth_store.py" <<'PY'
+import http.server, json, sys
+KNOWN = {"cred_0a1b2c3d4e5f60718293a4b5", "cred_0a1b2c3d4e5f60718293a4b6"}
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        parts = self.path.split("/")  # /api/credentials/<id>/resolve
+        if self.headers.get("Authorization") != "Bearer e2e-smoke-token":
+            self.send_error(401); return
+        if len(parts) != 5 or parts[4] != "resolve" or parts[3] not in KNOWN:
+            self.send_error(404); return
+        body = json.dumps({"id": parts[3], "api_key": "e2e-smoke-not-a-real-key"}).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *args): pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+PY
+python3 -I "$TMP_DIR/fake_auth_store.py" "$AUTH_STORE_PORT" &
+AUTH_STORE_PID=$!
+export ARGRAPHMENTS_AUTH_STORE_URL="http://127.0.0.1:$AUTH_STORE_PORT"
+export ARGRAPHMENTS_AUTH_STORE_TOKEN="e2e-smoke-token"
+export ARGRAPHMENTS_ANTHROPIC_CREDENTIAL_ID="cred_0a1b2c3d4e5f60718293a4b5"
+export ARGRAPHMENTS_OPENAI_CREDENTIAL_ID="cred_0a1b2c3d4e5f60718293a4b6"
+for _ in $(seq 50); do curl -s -o /dev/null "$ARGRAPHMENTS_AUTH_STORE_URL/" && break; sleep 0.1; done
 
 # Refuse to run if something already owns the port — otherwise every assertion
 # below would silently be testing THAT process (e.g. the live service).
@@ -150,7 +174,7 @@ echo "    $RUN_DIR (templates + static)"
 
 step "launch argraphments on :$PORT (db: $DB_PATH)"
 cd "$RUN_DIR"
-PORT="$PORT" ARGRAPHMENTS_DB="$DB_PATH" \
+ARGRAPHMENTS_ADDR="127.0.0.1:$PORT" ARGRAPHMENTS_DB="$DB_PATH" \
   "$BIN_DIR/argraphments" >"$LOG" 2>&1 &
 SERVER_PID=$!
 echo "    pid: $SERVER_PID"
@@ -228,18 +252,18 @@ PREFIXED="$(curl -fsS "$BASE/argraphments/api/transcripts")"
 echo "    both prefixes serve the same data"
 
 step "the API-key gate is real"
-# main() log.Fatal's without ANTHROPIC_API_KEY / OPENAI_API_KEY. That gate is the
-# reason this smoke has to supply dummies at all — so prove it still bites,
-# otherwise the dummies above are cargo cult and a keyless deploy would boot into
-# a service that 500s on its first real request instead of refusing to start.
+# main() log.Fatal's when auth-store cannot hand it the Anthropic key. That gate
+# is the reason this smoke runs a fake auth-store at all — so prove it still
+# bites, otherwise a keyless deploy would boot into a service that 500s on its
+# first real request instead of refusing to start.
 set +e
-( cd "$RUN_DIR" && env -u ANTHROPIC_API_KEY PORT="$PORT" ARGRAPHMENTS_DB="$DB_PATH" \
+( cd "$RUN_DIR" && ARGRAPHMENTS_ANTHROPIC_CREDENTIAL_ID="cred_ffffffffffffffffffffffff" ARGRAPHMENTS_ADDR="127.0.0.1:$PORT" ARGRAPHMENTS_DB="$DB_PATH" \
     "$BIN_DIR/argraphments" >"$TMP_DIR/nokey.log" 2>&1 )
 NOKEY_RC=$?
 set -e
 [ "$NOKEY_RC" -ne 0 ] \
-  || fail "the binary started WITHOUT ANTHROPIC_API_KEY — the startup key check is gone"
-grep -q 'ANTHROPIC_API_KEY required' "$TMP_DIR/nokey.log" \
+  || fail "the binary started with a credential auth-store does not have — the startup key check is gone"
+grep -q 'the Anthropic key: auth-store answered 404' "$TMP_DIR/nokey.log" \
   || fail "keyless start failed, but not with the expected message: $(cat "$TMP_DIR/nokey.log")"
 echo "    refuses to start without a key (rc=$NOKEY_RC)"
 

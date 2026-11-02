@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kayushkin/argraphments/storage"
+	"github.com/kayushkin/llm-bridge/servicesettings"
 )
 
 var (
@@ -27,16 +28,20 @@ var (
 )
 
 func main() {
-	anthropicKey = os.Getenv("ANTHROPIC_API_KEY")
-	openaiKey = os.Getenv("OPENAI_API_KEY")
-	if anthropicKey == "" {
-		log.Fatal("ANTHROPIC_API_KEY required")
+	settings, err := NewSettingsRegistry(servicesettings.ProcessEnvironment())
+	if err != nil {
+		log.Fatalf("settings: %v", err)
 	}
-	if openaiKey == "" {
-		log.Fatal("OPENAI_API_KEY required")
+	authStoreURL, authStoreToken := settings.String(SettingAuthStoreURL), settings.String(SettingAuthStoreToken)
+	anthropicKey, err = resolveAPIKey(authStoreURL, authStoreToken, settings.String(SettingAnthropicCredentialID), "argraphments:claude")
+	if err != nil {
+		log.Fatalf("the Anthropic key: %v", err)
+	}
+	openaiKey, err = resolveAPIKey(authStoreURL, authStoreToken, settings.String(SettingOpenAICredentialID), "argraphments:whisper")
+	if err != nil {
+		log.Fatalf("the OpenAI key: %v", err)
 	}
 
-	var err error
 	templates, err = loadTemplates()
 	if err != nil {
 		log.Fatal(err)
@@ -44,7 +49,7 @@ func main() {
 
 	os.MkdirAll("uploads", 0755)
 
-	dbPath := getEnv("ARGRAPHMENTS_DB", "./argraphments.db")
+	dbPath := settings.String(SettingDatabasePath)
 	store, err = storage.NewStore(dbPath)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
@@ -77,21 +82,13 @@ func main() {
 		mux.HandleFunc(p+"/api/sample", handleAPISample)
 	}
 
-	port := getEnv("PORT", "8086")
-	addr := "127.0.0.1:" + port
+	addr := settings.String(SettingListenAddress)
 	log.Printf("argraphments listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
 
 func loadTemplates() (*template.Template, error) {
 	return template.ParseGlob("templates/*.html")
-}
-
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
