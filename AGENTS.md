@@ -18,7 +18,7 @@ These sections are stored in agent-store as a project prompt collection and rend
 
 ## Running and deploying
 
-The system unit `argraphments.service` runs the installed binary from this repo's directory, on the `PORT` it sets, and reads `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from `.env` here (never committed). `./deploy.sh` builds, installs the binary and the unit from `argraphments.service` in this repo, restarts it and checks that it answers; the template in the repo is the only copy of the unit, so edit it there, never the installed one.
+The system unit `argraphments.service` runs the installed binary from this repo's directory and listens on `ARGRAPHMENTS_ADDR`. Every setting is declared once in `settings.go` with llm-bridge `servicesettings`; a set `ARGRAPHMENTS_` variable nobody declared stops the service at start. It reads both model keys from auth-store at start, by credential id (`ARGRAPHMENTS_ANTHROPIC_CREDENTIAL_ID`, `ARGRAPHMENTS_OPENAI_CREDENTIAL_ID`), and refuses to start without them. auth-store's URL, its token and those ids live in a host-local, root-only drop-in, `auth-store.conf` beside the live unit, never in this repo; there is no `.env` file. `./deploy.sh` checks the drop-in sets all four, builds, installs the binary and the unit from `argraphments.service` in this repo, restarts it and checks that it answers; the template in the repo is the only copy of the unit, so edit it there, never the installed one.
 
 # Working in this repo
 
