@@ -411,7 +411,7 @@ func TestExtractIncrementalIncludesTheContextSectionWhenGivenOne(t *testing.T) {
 		t.Error("context body missing")
 	}
 	if !strings.Contains(prompt, "already analyzed") {
-		t.Error("the context header must tell the model this text is already analysed")
+		t.Error("the context header must tell the model this text is already analyzed")
 	}
 }
 
@@ -595,7 +595,7 @@ func TestExtractIncrementalLowercasesStatementTypes(t *testing.T) {
 }
 
 // ⚠️ Only the TOP level is lowercased. Nested children keep whatever case the
-// model sent, because the walk never recurses. Pinned as the behaviour that is
+// model sent, because the walk never recurses. Pinned as the behavior that is
 // actually there — if this ever starts failing, the recursion was added and
 // the frontend can stop case-folding.
 func TestExtractIncrementalDoesNotLowercaseNestedChildTypes(t *testing.T) {
@@ -730,7 +730,7 @@ func TestExtractIncrementalRejectsAReplyThatIsNeitherObjectNorArray(t *testing.T
 // halves. Measured here, it does not — it fixes DEFECT 2 alone, and this test
 // stayed green across it. The card has been corrected.
 //
-// This test pins the CURRENT behaviour. When the forwards half is decided it
+// This test pins the CURRENT behavior. When the forwards half is decided it
 // will fail; that is the signal to change it to expect a zero-statement
 // success.
 func TestExtractIncrementalEmptyStatementsObjectIsRejected_DEFECT(t *testing.T) {
@@ -974,7 +974,7 @@ func TestHandleAPIAnalyzeIncrementalTurnsAnExtractErrorInto500(t *testing.T) {
 
 // ⚠️ The multipart branch reads ONLY new_text and existing. context_text,
 // msg_offset and full_review are silently dropped on this path, so a form
-// client cannot request review mode at all. Pinned as the behaviour that is
+// client cannot request review mode at all. Pinned as the behavior that is
 // there.
 func TestHandleAPIAnalyzeIncrementalMultipartReadsOnlyNewTextAndExisting(t *testing.T) {
 	fake := &fakeAnthropic{replyText: `{"statements":[{"text":"a","type":"claim"}],"updates":[]}`}

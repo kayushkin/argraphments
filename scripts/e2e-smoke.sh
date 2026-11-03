@@ -143,7 +143,7 @@ if curl -fsS -o /dev/null --max-time 2 "$BASE/api/transcripts" 2>/dev/null; then
   exit 2
 fi
 
-# Snapshot whether the CWD-relative artefacts already exist in the checkout, so
+# Snapshot whether the CWD-relative artifacts already exist in the checkout, so
 # the hermeticity check at the end can tell "this run leaked a path into the
 # repo" from "the developer running this already had one".
 #
@@ -199,7 +199,7 @@ done
 step "GET /api/transcripts — a fresh DB is empty"
 LIST0="$(curl -fsS "$BASE/api/transcripts")"
 echo "    $LIST0"
-# An empty store serialises to null, not []; `null | length` is 0 either way.
+# An empty store serializes to null, not []; `null | length` is 0 either way.
 # Anything else means we opened a POPULATED database — i.e. very possibly the
 # live one, full of the user's real transcripts, and every assertion below would
 # be measuring their data.
@@ -273,7 +273,7 @@ step "the run was hermetic"
 # CWD-relative — so a path that escaped the temp dir lands in the checkout. Only
 # a path THIS RUN created is a failure (see the snapshot near the top).
 if [ "$DB_PREEXISTED" = "0" ] && [ -e "$REPO_DIR/argraphments.db" ]; then
-  fail "server wrote its DB INTO THE CHECKOUT at $REPO_DIR/argraphments.db — the ARGRAPHMENTS_DB override is not being honoured"
+  fail "server wrote its DB INTO THE CHECKOUT at $REPO_DIR/argraphments.db — the ARGRAPHMENTS_DB override is not being honored"
 fi
 if [ "$UPLOADS_PREEXISTED" = "0" ] && [ -e "$REPO_DIR/uploads" ]; then
   fail "server created ./uploads INTO THE CHECKOUT at $REPO_DIR/uploads — it is not running from the temp CWD"

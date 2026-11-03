@@ -135,7 +135,7 @@ func NormHash(text string) string {
 //
 // _pragma=... is modernc's syntax and it is the only one that works here.
 // The mattn/go-sqlite3 spelling (_foreign_keys=on) is silently ignored by
-// this driver, as is any other unrecognised key — hence the check in NewStore.
+// this driver, as is any other unrecognized key — hence the check in NewStore.
 func dataSourceName(dbPath string) string {
 	return dbPath + "?_pragma=foreign_keys(1)"
 }
@@ -149,7 +149,7 @@ func NewStore(dbPath string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	// An unrecognised DSN key is silently ignored by the driver, so prove the
+	// An unrecognized DSN key is silently ignored by the driver, so prove the
 	// setting actually took effect instead of trusting the connection string.
 	var foreignKeysEnabled bool
 	if err := db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeysEnabled); err != nil {

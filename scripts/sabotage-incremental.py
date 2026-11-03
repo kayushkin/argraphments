@@ -219,7 +219,7 @@ CASES = [
         [("\tidx := offset + 1", "\tidx := 1")],
     ),
     Case(
-        "the counter never advances, so every line is labelled [1]",
+        "the counter never advances, so every line is labeled [1]",
         [("\t\tidx++", "\t\t_ = idx")],
     ),
     Case(
@@ -261,7 +261,7 @@ CASES = [
           "\treturn numberTranscriptLinesOffset(transcript, 1)")],
     ),
 
-    # ---- summarizeStatements: the "already analysed" half of the prompt ----
+    # ---- summarizeStatements: the "already analyzed" half of the prompt ----
     Case(
         "an empty statement list returns an empty string, leaving a dangling prompt header",
         [('\t\treturn "(none yet)"', '\t\treturn ""')],
@@ -337,11 +337,11 @@ CASES = [
           "NEW PORTION to analyze (each line is pre-numbered: [N] (speaker_id) Name: text):\n` + \"\" + `")],
     ),
     # ⚠️ Replacing `existingSummary` with `""` here orphans the variable and
-    # scores `compile error`. Summarising an empty list instead keeps every
+    # scores `compile error`. Summarizing an empty list instead keeps every
     # name live — `existing` is a parameter, and Go permits an unused one — and
     # is the more realistic defect anyway (225th).
     Case(
-        "the existing analysis is summarised as empty, so the model re-extracts claims it has",
+        "the existing analysis is summarized as empty, so the model re-extracts claims it has",
         [("\texistingSummary := summarizeStatements(existing, 0)",
           "\texistingSummary := summarizeStatements(nil, 0)")],
     ),
@@ -434,7 +434,7 @@ CASES = [
     ),
 
     # ---- the defect characterisations ----
-    # These three cases break the CURRENT, defective behaviour. They must be
+    # These three cases break the CURRENT, defective behavior. They must be
     # CAUGHT, because the suite pins the defect deliberately: when the bug is
     # fixed the pinning tests fail loudly and name the card. A scorer that let
     # these pass would mean the characterisation is not actually asserted.
@@ -489,7 +489,7 @@ CASES = [
           '\tif req.NewText == "" {')],
     ),
     Case(
-        "a JSON decode failure is ignored, so a truncated body is analysed as an empty request",
+        "a JSON decode failure is ignored, so a truncated body is analyzed as an empty request",
         in_handler_head(
             '\t\tif err := json.NewDecoder(r.Body).Decode(&req); err != nil {\n'
             '\t\t\tjsonError(w, "invalid JSON", 400)\n\t\t\treturn\n\t\t}\n',
