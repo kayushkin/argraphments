@@ -133,7 +133,7 @@ sudo systemctl restart "$UNIT_NAME"
 echo "==> Waiting for :$PORT to answer..."
 READY_TIMEOUT=45
 for i in $(seq 1 "$READY_TIMEOUT"); do
-  if curl -fsS --max-time 5 "http://localhost:$PORT/api/transcripts" >/dev/null 2>&1; then
+  if curl -fsS --max-time 5 "http://localhost:$PORT/" >/dev/null 2>&1; then
     echo "    ready after ${i}s"
     break
   fi
@@ -150,15 +150,21 @@ for i in $(seq 1 "$READY_TIMEOUT"); do
   sleep 1
 done
 
-# Smoke a route that reads the DB, and assert on the body. "The port is open" only
-# proves a process bound it; this proves the deployed binary can reach its store
-# through the WorkingDirectory the unit just handed it -- the thing that was broken.
+# Smoke the two halves of the sign-in rule. The page shell is public and is
+# read from static/dist under the WorkingDirectory the unit just handed it; the
+# API answers an anonymous caller 401 with the sign-in page sign-in-store named.
+# A 200 here would mean the API is open to anyone, so it fails the deploy.
 echo "==> Smoke test..."
-BODY="$(curl -fsS --max-time 10 "http://localhost:$PORT/api/transcripts")"
-case "$BODY" in
-  '['*) echo "    /api/transcripts returned a JSON array" ;;
-  *)    echo "ERROR: /api/transcripts did not return a JSON array; got: ${BODY:0:200}"; exit 1 ;;
-esac
+PAGE_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "http://localhost:$PORT/argraphments/")"
+[ "$PAGE_STATUS" = 200 ] || { echo "ERROR: the page shell answered $PAGE_STATUS, want 200"; exit 1; }
+echo "    /argraphments/ answered 200"
+API_BODY_FILE="$(mktemp)"
+trap 'rm -f "$API_BODY_FILE"' EXIT
+API_STATUS="$(curl -sS -o "$API_BODY_FILE" -w '%{http_code}' --max-time 10 "http://localhost:$PORT/api/transcripts")"
+[ "$API_STATUS" = 401 ] || { echo "ERROR: an anonymous GET /api/transcripts answered $API_STATUS, want 401"; exit 1; }
+grep -q '"sign_in_page_url":"https://' "$API_BODY_FILE" \
+  || { echo "ERROR: the 401 names no sign-in page; got: $(head -c 200 "$API_BODY_FILE")"; exit 1; }
+echo "    anonymous /api/transcripts answered 401 with a sign-in page"
 
 # is-active is the last word: a unit that is up now but scheduled to restart is
 # not a successful deploy.

@@ -56,6 +56,7 @@ func TestSettingsRefuseToStartWithoutTheCredentialsOrWithAnUndeclaredVariable(t 
 		"ARGRAPHMENTS_AUTH_STORE_TOKEN":        "store-token",
 		"ARGRAPHMENTS_ANTHROPIC_CREDENTIAL_ID": "cred_0a1b2c3d4e5f60718293a4b5",
 		"ARGRAPHMENTS_OPENAI_CREDENTIAL_ID":    "cred_0a1b2c3d4e5f60718293a4b6",
+		"ARGRAPHMENTS_SIGN_IN_STORE_URL":       "http://127.0.0.1:2",
 	}
 	registry, err := NewSettingsRegistry(servicesettings.MapEnvironment(complete))
 	if err != nil {
@@ -64,14 +65,16 @@ func TestSettingsRefuseToStartWithoutTheCredentialsOrWithAnUndeclaredVariable(t 
 	if got := registry.String(SettingListenAddress); got != "127.0.0.1:8086" {
 		t.Errorf("listen address %q; want the loopback default", got)
 	}
-	missing := map[string]string{}
-	for k, v := range complete {
-		if k != "ARGRAPHMENTS_OPENAI_CREDENTIAL_ID" {
-			missing[k] = v
+	for _, required := range []string{"ARGRAPHMENTS_OPENAI_CREDENTIAL_ID", "ARGRAPHMENTS_SIGN_IN_STORE_URL"} {
+		missing := map[string]string{}
+		for k, v := range complete {
+			if k != required {
+				missing[k] = v
+			}
 		}
-	}
-	if _, err := NewSettingsRegistry(servicesettings.MapEnvironment(missing)); err == nil {
-		t.Error("started without the OpenAI credential id")
+		if _, err := NewSettingsRegistry(servicesettings.MapEnvironment(missing)); err == nil {
+			t.Errorf("started without %s", required)
+		}
 	}
 	undeclared := map[string]string{"ARGRAPHMENTS_OPENAI_API_KEY": "sk-test"}
 	for k, v := range complete {

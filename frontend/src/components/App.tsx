@@ -7,6 +7,7 @@ import SessionPage from './SessionPage';
 import SpeakersListPage from './SpeakersListPage';
 import ConversationsListPage from './ConversationsListPage';
 import SpeakerDetailPage from './SpeakerDetailPage';
+import SignInNotice from './SignInNotice';
 
 function Router() {
   const { view, setView, setSlug, setSpeakerPageName } = useSession();
@@ -64,6 +65,7 @@ export default function App() {
   return (
     <SpeakerProvider>
       <SessionProvider>
+        <SignInNotice />
         <Router />
       </SessionProvider>
     </SpeakerProvider>

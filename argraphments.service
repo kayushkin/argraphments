@@ -7,6 +7,8 @@ ExecStart=/usr/local/bin/argraphments-server
 WorkingDirectory=/home/kayushkincom/repos/argraphments
 User=kayushkincom
 Environment=ARGRAPHMENTS_ADDR=127.0.0.1:8086
+# Every /api/ route needs an administrator signed in through sign-in-store.
+Environment=ARGRAPHMENTS_SIGN_IN_STORE_URL=http://127.0.0.1:8328
 Environment=PATH=/home/kayushkincom/.deno/bin:/usr/local/bin:/usr/bin:/bin
 # ARGRAPHMENTS_AUTH_STORE_URL, _AUTH_STORE_TOKEN, _ANTHROPIC_CREDENTIAL_ID and
 # _OPENAI_CREDENTIAL_ID come from a host-local drop-in, auth-store.conf (mode 600).

@@ -103,3 +103,33 @@ func TestYouTubeImportAPI_NoBody(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
+
+func TestYtDlpIsGivenOnlyTheCanonicalAddressAfterDoubleDash(t *testing.T) {
+	videoID, err := extractVideoID("https://www.youtube.com/watch?v=aSMoF10iD-g&list=--exec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://www.youtube.com/watch?v=aSMoF10iD-g"
+	for name, arguments := range map[string][]string{
+		"title":    youTubeTitleArguments(videoID),
+		"captions": youTubeCaptionArguments(videoID, "/tmp/out", "cookies.txt"),
+	} {
+		count := len(arguments)
+		if count < 2 || arguments[count-2] != "--" || arguments[count-1] != want {
+			t.Errorf("%s arguments end %q, want \"--\" then %q", name, arguments, want)
+		}
+		for _, argument := range arguments[:count-1] {
+			if strings.Contains(argument, "list=") || strings.Contains(argument, "--exec") {
+				t.Errorf("%s arguments carry the visitor's string: %q", name, arguments)
+			}
+		}
+	}
+}
+
+func TestBareVideoIDMustBeAVideoID(t *testing.T) {
+	for _, input := range []string{"--exec=id;x", "aSMoF10iD g"} {
+		if _, err := extractVideoID(input); err == nil {
+			t.Errorf("extractVideoID(%q) accepted a string that is not a video id", input)
+		}
+	}
+}

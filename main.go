@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -56,35 +57,56 @@ func main() {
 	}
 	defer store.Close()
 
-	mux := http.NewServeMux()
-	staticFS := http.FileServer(http.Dir("static"))
-	distAssetsFS := http.FileServer(http.Dir("static/dist"))
-
-	// Register routes on both /argraphments and / prefixes
-	for _, prefix := range []string{"/argraphments", ""} {
-		p := prefix
-		mux.HandleFunc(p+"/", handleIndex)
-		mux.HandleFunc(p+"/convo/", handleIndex) // conversation URLs
-		mux.Handle(p+"/static/", http.StripPrefix(p+"/static/", staticFS))
-		mux.Handle(p+"/assets/", http.StripPrefix(p, distAssetsFS))
-		mux.HandleFunc(p+"/api/transcribe", handleAPITranscribe)
-		mux.HandleFunc(p+"/api/diarize", handleAPIDiarize)
-		mux.HandleFunc(p+"/api/analyze", handleAPIAnalyze)
-		mux.HandleFunc(p+"/api/analyze-incremental", handleAPIAnalyzeIncremental)
-		mux.HandleFunc(p+"/api/session/new", handleAPINewSession)
-		mux.HandleFunc(p+"/api/transcripts", handleAPITranscripts)
-		mux.HandleFunc(p+"/api/transcripts/", handleAPITranscripts)
-		mux.HandleFunc(p+"/api/claims/", handleAPIClaim)
-		mux.HandleFunc(p+"/api/speakers", handleAPISpeakers)
-		mux.HandleFunc(p+"/api/speakers/", handleAPISpeakers)
-		mux.HandleFunc(p+"/api/import/youtube", handleAPIImportYouTube)
-		mux.HandleFunc(p+"/api/graph", handleAPIGraph)
-		mux.HandleFunc(p+"/api/sample", handleAPISample)
+	signInGate, err := NewSignInGate(context.Background(), settings.String(SettingSignInStoreURL))
+	if err != nil {
+		log.Fatalf("the sign-in gate: %v", err)
 	}
+	mux := newServeMux(signInGate)
 
 	addr := settings.String(SettingListenAddress)
 	log.Printf("argraphments listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+// newServeMux registers every route on both the /argraphments prefix and the
+// bare one. The page shell and static files are public; everything under
+// /api/, including a path no handler claims, goes through signInGate.
+func newServeMux(signInGate *SignInGate) *http.ServeMux {
+	mux := http.NewServeMux()
+	staticFS := http.FileServer(http.Dir("static"))
+	distAssetsFS := http.FileServer(http.Dir("static/dist"))
+	apiRoutes := map[string]http.HandlerFunc{
+		"/api/transcribe":          handleAPITranscribe,
+		"/api/diarize":             handleAPIDiarize,
+		"/api/analyze":             handleAPIAnalyze,
+		"/api/analyze-incremental": handleAPIAnalyzeIncremental,
+		"/api/session/new":         handleAPINewSession,
+		"/api/transcripts":         handleAPITranscripts,
+		"/api/transcripts/":        handleAPITranscripts,
+		"/api/claims/":             handleAPIClaim,
+		"/api/speakers":            handleAPISpeakers,
+		"/api/speakers/":           handleAPISpeakers,
+		"/api/import/youtube":      handleAPIImportYouTube,
+		"/api/graph":               handleAPIGraph,
+		"/api/sample":              handleAPISample,
+		"/api/":                    handleAPIUnknownRoute,
+	}
+	for _, prefix := range []string{"/argraphments", ""} {
+		mux.HandleFunc(prefix+"/", handleIndex)
+		mux.HandleFunc(prefix+"/convo/", handleIndex) // conversation URLs
+		mux.Handle(prefix+"/static/", http.StripPrefix(prefix+"/static/", staticFS))
+		mux.Handle(prefix+"/assets/", http.StripPrefix(prefix, distAssetsFS))
+		for pattern, handler := range apiRoutes {
+			mux.Handle(prefix+pattern, signInGate.RequireAdministrator(handler))
+		}
+	}
+	return mux
+}
+
+// handleAPIUnknownRoute answers a path under /api/ that no handler claims, so
+// it is a JSON 404 behind the sign-in rather than the page shell.
+func handleAPIUnknownRoute(w http.ResponseWriter, r *http.Request) {
+	jsonError(w, "no such API route", http.StatusNotFound)
 }
 
 func loadTemplates() (*template.Template, error) {
@@ -237,12 +259,12 @@ func handleAPIAnalyze(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Transcript     string                    `json:"transcript"`
-		Slug           string                    `json:"slug,omitempty"`
-		Speakers       map[string]string         `json:"speakers,omitempty"`
-		Messages       []storage.DiarizeMessage  `json:"messages,omitempty"`
-		SpeakerAutoGen map[string]bool           `json:"speaker_auto_gen,omitempty"`
-		SourceURL      string                    `json:"source_url,omitempty"`
+		Transcript     string                   `json:"transcript"`
+		Slug           string                   `json:"slug,omitempty"`
+		Speakers       map[string]string        `json:"speakers,omitempty"`
+		Messages       []storage.DiarizeMessage `json:"messages,omitempty"`
+		SpeakerAutoGen map[string]bool          `json:"speaker_auto_gen,omitempty"`
+		SourceURL      string                   `json:"source_url,omitempty"`
 	}
 
 	ct := r.Header.Get("Content-Type")
@@ -764,15 +786,15 @@ Transcript:
 }
 
 type IncrementalResult struct {
-	Statements []Statement          `json:"statements"`
-	Updates    []StatementUpdate    `json:"updates,omitempty"`
+	Statements []Statement       `json:"statements"`
+	Updates    []StatementUpdate `json:"updates,omitempty"`
 }
 
 type StatementUpdate struct {
-	MsgIndex    int     `json:"msg_index"`
-	Text        *string `json:"text,omitempty"`
-	Type        *string `json:"type,omitempty"`
-	ParentText  *string `json:"parent_text,omitempty"`
+	MsgIndex   int     `json:"msg_index"`
+	Text       *string `json:"text,omitempty"`
+	Type       *string `json:"type,omitempty"`
+	ParentText *string `json:"parent_text,omitempty"`
 }
 
 func extractIncremental(newText string, contextText string, existing []Statement, msgOffset int, fullReview bool) (*IncrementalResult, error) {

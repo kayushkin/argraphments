@@ -37,29 +37,19 @@ func setupTestStore(t *testing.T) {
 	t.Cleanup(func() { store.Close(); store = nil })
 }
 
-func setupMux() *http.ServeMux {
-	mux := http.NewServeMux()
-	staticFS := http.FileServer(http.Dir("static"))
-	for _, prefix := range []string{"/argraphments", ""} {
-		p := prefix
-		mux.HandleFunc(p+"/", handleIndex)
-		mux.HandleFunc(p+"/convo/", handleIndex) // conversation URLs
-		mux.Handle(p+"/static/", http.StripPrefix(p+"/static/", staticFS))
-		mux.HandleFunc(p+"/api/session/new", handleAPINewSession)
-		mux.HandleFunc(p+"/api/transcribe", handleAPITranscribe)
-		mux.HandleFunc(p+"/api/diarize", handleAPIDiarize)
-		mux.HandleFunc(p+"/api/analyze", handleAPIAnalyze)
-		mux.HandleFunc(p+"/api/analyze-incremental", handleAPIAnalyzeIncremental)
-		mux.HandleFunc(p+"/api/transcripts", handleAPITranscripts)
-		mux.HandleFunc(p+"/api/transcripts/", handleAPITranscripts)
-		mux.HandleFunc(p+"/api/claims/", handleAPIClaim)
-		mux.HandleFunc(p+"/api/speakers", handleAPISpeakers)
-		mux.HandleFunc(p+"/api/speakers/", handleAPISpeakers)
-		mux.HandleFunc(p+"/api/import/youtube", handleAPIImportYouTube)
-		mux.HandleFunc(p+"/api/graph", handleAPIGraph)
-		mux.HandleFunc(p+"/api/sample", handleAPISample)
-	}
-	return mux
+// setupMux is the server's own route table behind a sign-in gate whose fake
+// sign-in-store signs in an administrator, and it adds that administrator's
+// cookie to every request, so the handler tests run as a signed-in caller.
+func setupMux() http.Handler {
+	signInStore := newFakeSignInStore(map[string]signInSession{
+		testAdministratorCookie: {PrincipalID: "principal_000001", DisplayName: "Test Administrator", IsAdministrator: true},
+	})
+	gate := newTestSignInGate(signInStore.URL)
+	mux := newServeMux(gate)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: signInSessionCookieName, Value: testAdministratorCookie})
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func TestIndex(t *testing.T) {

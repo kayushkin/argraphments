@@ -21,6 +21,7 @@ const (
 	SettingAuthStoreToken        = "auth_store_token"
 	SettingAnthropicCredentialID = "anthropic_credential_id"
 	SettingOpenAICredentialID    = "openai_credential_id"
+	SettingSignInStoreURL        = "sign_in_store_url"
 )
 
 // SettingDefinitions declares every ARGRAPHMENTS_ variable the server reads, once.
@@ -38,6 +39,8 @@ func SettingDefinitions() []servicesettings.Definition {
 			Description: "The auth-store credential (provider anthropic, field api_key) used to pull an argument tree out of a transcript."},
 		{Key: SettingOpenAICredentialID, EnvironmentVariable: "ARGRAPHMENTS_OPENAI_CREDENTIAL_ID", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString, Required: true,
 			Description: "The auth-store credential (provider openai, field api_key) used to transcribe recordings with Whisper."},
+		{Key: SettingSignInStoreURL, EnvironmentVariable: "ARGRAPHMENTS_SIGN_IN_STORE_URL", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString, Required: true,
+			Description: "sign-in-store's base URL. Every /api/ request's sign_in_session cookie is checked with its GET /session, and only administrators get in; the sign-in page address and cookie domain the page shows are read from its GET /settings at start."},
 	}
 }
 

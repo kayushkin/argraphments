@@ -12,13 +12,19 @@ These sections are stored in agent-store as a project prompt collection and rend
 
 ## Code layout
 
-`main.go` holds the HTTP server, routes and API handlers; `youtube.go` imports from YouTube; `sample.go` holds sample data; `storage/` keeps everything in SQLite. Pages are server-rendered Go templates (`templates/`) with HTMX partials; `frontend/` is a small Vite and TypeScript build into `static/dist`. Keep it HTMX-first: do not add a heavy JavaScript framework.
+`main.go` holds the HTTP server, routes and API handlers; `sign_in_gate.go` decides who may call the API; `youtube.go` imports from YouTube; `sample.go` holds sample data; `storage/` keeps everything in SQLite. Pages are server-rendered Go templates (`templates/`) with HTMX partials; `frontend/` is a small Vite and TypeScript build into `static/dist`. Keep it HTMX-first: do not add a heavy JavaScript framework.
 
 # Access and operations
 
 ## Running and deploying
 
 The system unit `argraphments.service` runs the installed binary from this repo's directory and listens on `ARGRAPHMENTS_ADDR`. Every setting is declared once in `settings.go` with llm-bridge `servicesettings`; a set `ARGRAPHMENTS_` variable nobody declared stops the service at start. It reads both model keys from auth-store at start, by credential id (`ARGRAPHMENTS_ANTHROPIC_CREDENTIAL_ID`, `ARGRAPHMENTS_OPENAI_CREDENTIAL_ID`), and refuses to start without them. auth-store's URL, its token and those ids live in a host-local, root-only drop-in, `auth-store.conf` beside the live unit, never in this repo; there is no `.env` file. `./deploy.sh` checks the drop-in sets all four, builds, installs the binary and the unit from `argraphments.service` in this repo, restarts it and checks that it answers; the template in the repo is the only copy of the unit, so edit it there, never the installed one.
+
+## Who may call the API
+
+Every route under `/api/`, with or without the `/argraphments` prefix and including paths no handler claims, needs a signed-in administrator; the page shell and static files stay public. `sign_in_gate.go` holds the check. The one credential is sign-in-store's `sign_in_session` cookie: the gate asks sign-in-store's `GET /session` with it and lets the request through only when `is_administrator` is true. No cookie or an ended session gets 401, a signed-in person who is not an administrator 403, and an unreachable sign-in-store 502; nothing else counts as identity, not a header and not a loopback address (nginx connects from loopback). A request that is not GET, HEAD or OPTIONS also gets 403 when its `Sec-Fetch-Site` header is present and is neither `same-origin` nor `none`. Answers are cached for 10 seconds per cookie, and expired ones are dropped whenever one is added.
+
+sign-in-store's URL is `ARGRAPHMENTS_SIGN_IN_STORE_URL` in the unit template. At start the service reads `sign_in_page_url` and `cookie_domain` from sign-in-store's `GET /settings` and refuses to start without them; every 401 and 403 carries both, and the page shows a notice from them. The cookie is sent only to the cookie domain and the names under it, so on any other host the notice sends the visitor to the app on the cookie domain instead of to the sign-in page. `deploy.sh` checks that an anonymous `GET /api/transcripts` answers 401, so a deploy that opens the API fails.
 
 # Working in this repo
 

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,15 +14,46 @@ import (
 
 var videoIDRegex = regexp.MustCompile(`(?:v=|youtu\.be/|/embed/|/v/)([a-zA-Z0-9_-]{11})`)
 
+var bareVideoIDRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{11}$`)
+
 func extractVideoID(rawURL string) (string, error) {
 	m := videoIDRegex.FindStringSubmatch(rawURL)
 	if m == nil {
-		if len(rawURL) == 11 {
+		if bareVideoIDRegex.MatchString(rawURL) {
 			return rawURL, nil
 		}
 		return "", fmt.Errorf("could not extract video ID from URL")
 	}
 	return m[1], nil
+}
+
+// canonicalYouTubeURL is the only address yt-dlp is ever given: built from
+// the parsed video id, never the visitor's own string.
+func canonicalYouTubeURL(videoID string) string {
+	return "https://www.youtube.com/watch?v=" + videoID
+}
+
+// youTubeTitleArguments are yt-dlp's arguments to print a video's title. The
+// address follows "--", so yt-dlp reads it as an address and never an option.
+func youTubeTitleArguments(videoID string) []string {
+	return []string{"--skip-download", "--print", "%(title)s", "--", canonicalYouTubeURL(videoID)}
+}
+
+// youTubeCaptionArguments are yt-dlp's arguments to write a video's English
+// captions as json3 to outputPath. cookiesFile may be empty.
+func youTubeCaptionArguments(videoID, outputPath, cookiesFile string) []string {
+	arguments := []string{
+		"--write-auto-sub",
+		"--sub-lang", "en,en-orig",
+		"--sub-format", "json3",
+		"--skip-download",
+		"-o", outputPath,
+	}
+	if cookiesFile != "" {
+		arguments = append(arguments, "--cookies", cookiesFile)
+	}
+	arguments = append(arguments, "--impersonate", "chrome")
+	return append(arguments, "--", canonicalYouTubeURL(videoID))
 }
 
 // fetchYouTubeTranscript uses yt-dlp to grab auto-generated captions.
@@ -50,19 +82,13 @@ func fetchYouTubeTranscript(videoURL string) (text string, title string, segment
 
 	outPath := filepath.Join(tmpDir, "video")
 
-	// Get title first
-	titleCmd := exec.Command(ytdlp, "--skip-download", "--print", "%(title)s", videoURL)
-	titleOut, _ := titleCmd.Output()
-	title = strings.TrimSpace(string(titleOut))
-
-	// Download auto-subs as json3
-	args := []string{
-		"--write-auto-sub",
-		"--sub-lang", "en,en-orig",
-		"--sub-format", "json3",
-		"--skip-download",
-		"-o", outPath,
+	// Get title first. A failure here is logged; the caption call below
+	// reports its own error.
+	titleOut, err := exec.Command(ytdlp, youTubeTitleArguments(videoID)...).Output()
+	if err != nil {
+		log.Printf("yt-dlp could not read the title of %s: %v", videoID, err)
 	}
+	title = strings.TrimSpace(string(titleOut))
 
 	// Use cookies file if available
 	cookiesFile := filepath.Join(filepath.Dir(os.Args[0]), "cookies.txt")
@@ -70,8 +96,8 @@ func fetchYouTubeTranscript(videoURL string) (text string, title string, segment
 		// Also check working directory
 		cookiesFile = "cookies.txt"
 	}
-	if _, err := os.Stat(cookiesFile); err == nil {
-		args = append(args, "--cookies", cookiesFile)
+	if _, err := os.Stat(cookiesFile); err != nil {
+		cookiesFile = ""
 	}
 
 	// Ensure deno is in PATH
@@ -81,10 +107,7 @@ func fetchYouTubeTranscript(videoURL string) (text string, title string, segment
 		os.Setenv("PATH", denoPath+":"+currentPath)
 	}
 
-	// Use impersonation if available
-	args = append(args, "--impersonate", "chrome")
-
-	args = append(args, "https://www.youtube.com/watch?v="+videoID)
+	args := youTubeCaptionArguments(videoID, outPath, cookiesFile)
 	cmd := exec.Command(ytdlp, args...)
 
 	var stderr strings.Builder
